@@ -5,6 +5,27 @@ All notable changes to the Born ML Framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.11] - 2026-02-27
+
+### 🔧 Dependencies Update
+
+Update WebGPU backend to v0.3.2 with crosscall2 callback integration.
+
+**Updated Dependencies**:
+- `go-webgpu/webgpu` v0.3.1 → **v0.3.2**
+- `go-webgpu/goffi` v0.3.9 → **v0.4.0** (indirect)
+
+**Upstream Improvements**:
+- crosscall2 integration — callbacks now work from C-library-created threads (Metal, wgpu-native)
+- fakecgo trampoline register fixes synced with purego v0.10.0
+
+**Impact**: Improved callback reliability on macOS Metal and native WebGPU implementations.
+
+**Links**:
+- Upstream release: [go-webgpu v0.3.2](https://github.com/go-webgpu/webgpu/releases/tag/v0.3.2)
+
+---
+
 ## [0.7.10] - 2026-02-18
 
 ### 🔧 Dependencies Update
@@ -18,6 +39,10 @@ Update WebGPU backend to v0.3.1 with critical ARM64 callback fix.
 **Upstream Fixes**:
 - ARM64 callback trampoline rewrite — fixes LR corruption for callbacks at index > 0
 - Symbol rename to prevent linker collision with purego
+
+**Code Quality**:
+- Removed 101 unused `//nolint:gosec` directives (gosec linter updated, no longer flags these)
+- Standardized remaining nolint comments to short format
 
 **Impact**: Critical fix for macOS Apple Silicon and Linux ARM64 users.
 
@@ -1128,6 +1153,10 @@ N/A (initial release)
 
 ---
 
+[0.7.10]: https://github.com/born-ml/born/releases/tag/v0.7.10
+[0.7.9]: https://github.com/born-ml/born/releases/tag/v0.7.9
+[0.7.8]: https://github.com/born-ml/born/releases/tag/v0.7.8
+[0.7.11]: https://github.com/born-ml/born/releases/tag/v0.7.11
 [0.7.10]: https://github.com/born-ml/born/releases/tag/v0.7.10
 [0.7.9]: https://github.com/born-ml/born/releases/tag/v0.7.9
 [0.7.8]: https://github.com/born-ml/born/releases/tag/v0.7.8

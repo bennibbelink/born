@@ -452,8 +452,10 @@ func TestInitialization(t *testing.T) {
 	data := w.Raw().AsFloat32()
 
 	// Check all values are within [-bound, bound]
+	// Tolerance accounts for float64→float32 rounding in Xavier()
+	const eps = 1e-6
 	for i, val := range data {
-		if math.Abs(float64(val)) > expectedBound {
+		if math.Abs(float64(val)) > expectedBound+eps {
 			t.Errorf("Xavier init value[%d] = %f exceeds bound %f", i, val, expectedBound)
 		}
 	}

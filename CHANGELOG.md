@@ -5,6 +5,31 @@ All notable changes to the Born ML Framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.12] - 2026-02-27
+
+### 🔧 Dependencies Update
+
+Update WebGPU backend to v0.4.0 with FFI hardening and improved library loading.
+
+**Updated Dependencies**:
+- `go-webgpu/webgpu` v0.3.2 → **v0.4.0**
+
+**Upstream Improvements**:
+- Null handle guards on 27 public FFI methods — prevents SIGSEGV on nil/released objects
+- `ptrFromUintptr` helper — eliminates all `go vet` unsafe.Pointer warnings
+- `WGPU_NATIVE_PATH` env var for custom wgpu-native library path
+- `loadLibrary` returns `(Library, error)` with proper error propagation
+- Windows DLL eager loading — errors surface at init, not at first use
+- Enhanced `Init()` error messages with library path and remediation suggestions
+- 85 new null guard test cases
+
+**Impact**: Significantly improved safety and debuggability of GPU backend initialization.
+
+**Links**:
+- Upstream release: [go-webgpu v0.4.0](https://github.com/go-webgpu/webgpu/releases/tag/v0.4.0)
+
+---
+
 ## [0.7.11] - 2026-02-27
 
 ### 🔧 Dependencies Update
@@ -1156,6 +1181,7 @@ N/A (initial release)
 [0.7.10]: https://github.com/born-ml/born/releases/tag/v0.7.10
 [0.7.9]: https://github.com/born-ml/born/releases/tag/v0.7.9
 [0.7.8]: https://github.com/born-ml/born/releases/tag/v0.7.8
+[0.7.12]: https://github.com/born-ml/born/releases/tag/v0.7.12
 [0.7.11]: https://github.com/born-ml/born/releases/tag/v0.7.11
 [0.7.10]: https://github.com/born-ml/born/releases/tag/v0.7.10
 [0.7.9]: https://github.com/born-ml/born/releases/tag/v0.7.9

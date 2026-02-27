@@ -3,7 +3,7 @@ module github.com/born-ml/born
 go 1.25
 
 require (
-	github.com/go-webgpu/webgpu v0.3.2
+	github.com/go-webgpu/webgpu v0.4.0
 	github.com/gogpu/gputypes v0.2.0
 	github.com/pkoukk/tiktoken-go v0.1.8
 	github.com/stretchr/testify v1.11.1

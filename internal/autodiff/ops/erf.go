@@ -1,6 +1,7 @@
 package ops
 
 import (
+	"log"
 	"math"
 
 	"github.com/born-ml/born/internal/tensor"
@@ -27,10 +28,24 @@ func NewErfOp(a, output *tensor.RawTensor) *ErfOp {
 func (op *ErfOp) Backward(outputGrad *tensor.RawTensor, backend tensor.Backend) []*tensor.RawTensor {
 	a := op.input
 
-	scale := 2.0 / math.Sqrt(math.Pi)
 	// grad_a = outputGrad * (scale * exp(-a²))
 	aSquared := backend.Mul(a, a)
-	factor := backend.MulScalar(backend.Exp(backend.MulScalar(aSquared, -1)), scale)
+	outputGrad.DType()
+
+	dtype := a.DType()
+	var negOne, scale any
+	switch dtype {
+	case tensor.Float32:
+		negOne = float32(-1.0)
+		scale = float32(2.0 / math.Sqrt(math.Pi))
+	case tensor.Float64:
+		negOne = float64(-1.0)
+		scale = float64(2.0 / math.Sqrt(math.Pi))
+	default:
+		log.Fatalf("Unsupported data type for ErfOp backward: %v", dtype)
+	}
+
+	factor := backend.MulScalar(backend.Exp(backend.MulScalar(aSquared, negOne)), scale)
 	gradA := backend.Mul(outputGrad, factor)
 	gradA = reduceBroadcast(gradA, a.Shape(), backend)
 

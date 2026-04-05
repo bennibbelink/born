@@ -177,6 +177,42 @@ func TestDivGPU(t *testing.T) {
 	}
 }
 
+func TestErfGPU(t *testing.T) {
+	backend, err := New()
+	if err != nil {
+		t.Skipf("WebGPU not available: %v", err)
+	}
+	defer backend.Release()
+
+	// Create input tensors
+	aData := []float32{-2.0, -1.0, 0.0, 1.0, 2.0}
+	shape := tensor.Shape{5}
+
+	aRaw, _ := tensor.NewRaw(shape, tensor.Float32, tensor.CPU)
+	copy(aRaw.AsFloat32(), aData)
+
+	// Upload to GPU
+	aGPU := backend.UploadTensor(aRaw)
+	defer aGPU.Release()
+
+	// Run GPU division
+	cGPU := backend.ErfGPU(aGPU)
+	defer cGPU.Release()
+
+	// Transfer result back to CPU
+	result := cGPU.ToCPU()
+
+	// Verify result
+	expected := []float32{-0.9953222650189527, -0.8427007929497148, 0.0, 0.8427007929497148, 0.9953222650189527}
+	resultData := result.AsFloat32()
+
+	for i, exp := range expected {
+		if resultData[i] != exp {
+			t.Errorf("DivGPU[%d]: expected %v, got %v", i, exp, resultData[i])
+		}
+	}
+}
+
 // TestMatMulGPU tests GPU-native matrix multiplication.
 func TestMatMulGPU(t *testing.T) {
 	backend, err := New()

@@ -50,6 +50,7 @@ type Backend interface {
 	Rsqrt(x *RawTensor) *RawTensor // reciprocal square root (1/sqrt(x))
 	Cos(x *RawTensor) *RawTensor   // cosine
 	Sin(x *RawTensor) *RawTensor   // sine
+	Erf(x *RawTensor) *RawTensor   // error function
 
 	// Activation functions
 	Softmax(x *RawTensor, dim int) *RawTensor // softmax along dimension

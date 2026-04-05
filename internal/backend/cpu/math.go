@@ -187,3 +187,30 @@ func (cpu *CPUBackend) Sin(x *tensor.RawTensor) *tensor.RawTensor {
 
 	return result
 }
+
+// Erf computes element-wise error function: erf(x).
+func (cpu *CPUBackend) Erf(x *tensor.RawTensor) *tensor.RawTensor {
+	result, err := tensor.NewRaw(x.Shape(), x.DType(), cpu.device)
+	if err != nil {
+		panic(fmt.Sprintf("erf: %v", err))
+	}
+
+	switch x.DType() {
+	case tensor.Float32:
+		src := x.AsFloat32()
+		dst := result.AsFloat32()
+		for i, v := range src {
+			dst[i] = float32(math.Erf(float64(v)))
+		}
+	case tensor.Float64:
+		src := x.AsFloat64()
+		dst := result.AsFloat64()
+		for i, v := range src {
+			dst[i] = math.Erf(v)
+		}
+	default:
+		panic(fmt.Sprintf("erf: unsupported dtype %s (only float32/float64 supported)", x.DType()))
+	}
+
+	return result
+}

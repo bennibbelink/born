@@ -44,21 +44,26 @@ func (cpu *CPUBackend) MaxPool2DBackward(input, grad *tensor.RawTensor, maxIndic
 		panic(fmt.Sprintf("MaxPool2DBackward: maxIndices length %d != expected %d", len(maxIndices), expectedLen))
 	}
 
+	poolDims := &PoolDims{
+		N: N, C: C, H: H, W: W,
+		KH: kernelSize, KW: kernelSize,
+		HOut: HOut, WOut: WOut,
+		Stride: stride,
+	}
+
 	// Dispatch by dtype
 	switch grad.DType() {
 	case tensor.Float32:
 		maxPool2DBackwardFloat32(
 			inputGrad, grad,
 			maxIndices,
-			N, C, H, W, HOut, WOut,
-			kernelSize, stride,
+			poolDims,
 		)
 	case tensor.Float64:
 		maxPool2DBackwardFloat64(
 			inputGrad, grad,
 			maxIndices,
-			N, C, H, W, HOut, WOut,
-			kernelSize, stride,
+			poolDims,
 		)
 	default:
 		panic("MaxPool2DBackward: unsupported dtype")
@@ -68,15 +73,18 @@ func (cpu *CPUBackend) MaxPool2DBackward(input, grad *tensor.RawTensor, maxIndic
 }
 
 // maxPool2DBackwardFloat32 routes gradients to max positions for float32.
-//
-//nolint:gocritic // Short var names N,C for readability; unused params for API consistency
 func maxPool2DBackwardFloat32(
 	inputGrad, grad *tensor.RawTensor,
 	maxIndices []int,
-	N, C, _, _, HOut, WOut, _, _ int,
+	dims *PoolDims,
 ) {
 	inputGradData := inputGrad.AsFloat32()
 	gradData := grad.AsFloat32()
+
+	N := dims.N
+	C := dims.C
+	HOut := dims.HOut
+	WOut := dims.WOut
 
 	// Initialize to zero
 	for i := range inputGradData {
@@ -107,15 +115,18 @@ func maxPool2DBackwardFloat32(
 }
 
 // maxPool2DBackwardFloat64 routes gradients to max positions for float64.
-//
-//nolint:gocritic // Short var names N,C for readability; unused params for API consistency
 func maxPool2DBackwardFloat64(
 	inputGrad, grad *tensor.RawTensor,
 	maxIndices []int,
-	N, C, _, _, HOut, WOut, _, _ int,
+	dims *PoolDims,
 ) {
 	inputGradData := inputGrad.AsFloat64()
 	gradData := grad.AsFloat64()
+
+	N := dims.N
+	C := dims.C
+	HOut := dims.HOut
+	WOut := dims.WOut
 
 	for i := range inputGradData {
 		inputGradData[i] = 0.0

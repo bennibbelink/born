@@ -13,7 +13,7 @@ import (
 //   - d(erf(a))/da = 2/sqrt(pi) * exp(-a²), so grad_a = outputGrad * (2/sqrt(pi) * exp(-a²))
 type ErfOp struct {
 	input  *tensor.RawTensor // a
-	output *tensor.RawTensor // a / b
+	output *tensor.RawTensor // erf(a)
 }
 
 // NewErfOp creates a new ErfOp.
@@ -30,7 +30,6 @@ func (op *ErfOp) Backward(outputGrad *tensor.RawTensor, backend tensor.Backend) 
 
 	// grad_a = outputGrad * (scale * exp(-a²))
 	aSquared := backend.Mul(a, a)
-	outputGrad.DType()
 
 	dtype := a.DType()
 	var negOne, scale any
@@ -57,7 +56,7 @@ func (op *ErfOp) Inputs() []*tensor.RawTensor {
 	return []*tensor.RawTensor{op.input}
 }
 
-// Output returns the output tensor a / b.
+// Output returns the output tensor erf(a).
 func (op *ErfOp) Output() *tensor.RawTensor {
 	return op.output
 }

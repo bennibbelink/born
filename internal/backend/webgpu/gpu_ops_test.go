@@ -195,7 +195,7 @@ func TestErfGPU(t *testing.T) {
 	aGPU := backend.UploadTensor(aRaw)
 	defer aGPU.Release()
 
-	// Run GPU division
+	// Run GPU error function
 	cGPU := backend.ErfGPU(aGPU)
 	defer cGPU.Release()
 
@@ -206,9 +206,10 @@ func TestErfGPU(t *testing.T) {
 	expected := []float32{-0.9953222650189527, -0.8427007929497148, 0.0, 0.8427007929497148, 0.9953222650189527}
 	resultData := result.AsFloat32()
 
+	const eps = 1e-5
 	for i, exp := range expected {
-		if resultData[i] != exp {
-			t.Errorf("DivGPU[%d]: expected %v, got %v", i, exp, resultData[i])
+		if math.Abs(float64(resultData[i]-exp)) > eps {
+			t.Errorf("ErfGPU[%d]: expected %v, got %v", i, exp, resultData[i])
 		}
 	}
 }

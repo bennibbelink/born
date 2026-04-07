@@ -84,6 +84,17 @@ func (t *Tensor[T, B]) Exp() *Tensor[T, B] {
 	return New[T, B](result, t.backend)
 }
 
+// Erf computes the error function of each element.
+//
+// Example:
+//
+//	x := tensor.Randn[float32](Shape{2, 3}, backend)
+//	y := x.Erf()  // erf(x) for each element
+func (t *Tensor[T, B]) Erf() *Tensor[T, B] {
+	result := t.backend.Erf(t.raw)
+	return New[T, B](result, t.backend)
+}
+
 // Log computes the natural logarithm (ln(x)) of each element.
 //
 // Example:

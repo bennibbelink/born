@@ -350,6 +350,21 @@ func (b *Backend) Sin(x *tensor.RawTensor) *tensor.RawTensor {
 	return result
 }
 
+// Erf computes element-wise error function on GPU.
+func (b *Backend) Erf(x *tensor.RawTensor) *tensor.RawTensor {
+	var result *tensor.RawTensor
+	var err error
+	if b.LazyMode {
+		result, err = b.runUnaryOpLazy(x, "erf", erfShader)
+	} else {
+		result, err = b.runUnaryOp(x, "erf", erfShader)
+	}
+	if err != nil {
+		panic("webgpu: Erf: " + err.Error())
+	}
+	return result
+}
+
 // SumDim sums along a dimension.
 // Implemented on CPU as reduction operations are complex on GPU.
 func (b *Backend) SumDim(x *tensor.RawTensor, dim int, keepDim bool) *tensor.RawTensor {

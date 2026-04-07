@@ -501,6 +501,11 @@ func (m *MockBackend) Exp(x *RawTensor) *RawTensor {
 	return m.unaryOp(x, math.Exp)
 }
 
+// Erf computes element-wise error function.
+func (m *MockBackend) Erf(x *RawTensor) *RawTensor {
+	return m.unaryOp(x, math.Erf)
+}
+
 // Sqrt computes element-wise square root.
 func (m *MockBackend) Sqrt(x *RawTensor) *RawTensor {
 	return m.unaryOp(x, func(v float64) float64 {

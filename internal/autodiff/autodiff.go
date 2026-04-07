@@ -576,6 +576,20 @@ func (b *AutodiffBackend[B]) Exp(x *tensor.RawTensor) *tensor.RawTensor {
 	return result
 }
 
+// Erf computes element-wise error function and records the operation.
+func (b *AutodiffBackend[B]) Erf(x *tensor.RawTensor) *tensor.RawTensor {
+	defer x.ForceNonUnique()()
+
+	result := b.inner.Erf(x)
+
+	if b.tape.IsRecording() {
+		op := ops.NewErfOp(x, result)
+		b.tape.Record(op)
+	}
+
+	return result
+}
+
 // Sqrt computes element-wise square root and records the operation.
 func (b *AutodiffBackend[B]) Sqrt(x *tensor.RawTensor) *tensor.RawTensor {
 	defer x.ForceNonUnique()()

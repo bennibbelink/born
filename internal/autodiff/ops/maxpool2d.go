@@ -1,6 +1,7 @@
 package ops
 
 import (
+	"github.com/born-ml/born/internal/backend/cpu"
 	"github.com/born-ml/born/internal/tensor"
 )
 
@@ -61,12 +62,19 @@ func computeMaxIndices(input, output *tensor.RawTensor, kernelSize, stride int) 
 	numOutputs := N * C * HOut * WOut
 	maxIndices := make([]int, numOutputs)
 
+	poolDims := &cpu.PoolDims{
+		N: N, C: C, H: H, W: W,
+		KH: kernelSize, KW: kernelSize,
+		HOut: HOut, WOut: WOut,
+		Stride: stride,
+	}
+
 	// Compute max indices based on dtype
 	switch input.DType() {
 	case tensor.Float32:
-		computeMaxIndicesFloat32(maxIndices, input, N, C, H, W, HOut, WOut, kernelSize, stride)
+		computeMaxIndicesFloat32(maxIndices, input, poolDims)
 	case tensor.Float64:
-		computeMaxIndicesFloat64(maxIndices, input, N, C, H, W, HOut, WOut, kernelSize, stride)
+		computeMaxIndicesFloat64(maxIndices, input, poolDims)
 	default:
 		panic("MaxPool2D: unsupported dtype")
 	}
@@ -75,8 +83,17 @@ func computeMaxIndices(input, output *tensor.RawTensor, kernelSize, stride int) 
 }
 
 // computeMaxIndicesFloat32 finds max positions for float32 tensors.
-func computeMaxIndicesFloat32(maxIndices []int, input *tensor.RawTensor, N, C, H, W, HOut, WOut, kernelSize, stride int) {
+func computeMaxIndicesFloat32(maxIndices []int, input *tensor.RawTensor, dims *cpu.PoolDims) {
 	inputData := input.AsFloat32()
+
+	N := dims.N
+	C := dims.C
+	H := dims.H
+	W := dims.W
+	HOut := dims.HOut
+	WOut := dims.WOut
+	kernelSize := dims.KH
+	stride := dims.Stride
 
 	outIdx := 0
 	for n := 0; n < N; n++ {
@@ -114,8 +131,17 @@ func computeMaxIndicesFloat32(maxIndices []int, input *tensor.RawTensor, N, C, H
 }
 
 // computeMaxIndicesFloat64 finds max positions for float64 tensors.
-func computeMaxIndicesFloat64(maxIndices []int, input *tensor.RawTensor, N, C, H, W, HOut, WOut, kernelSize, stride int) {
+func computeMaxIndicesFloat64(maxIndices []int, input *tensor.RawTensor, dims *cpu.PoolDims) {
 	inputData := input.AsFloat64()
+
+	N := dims.N
+	C := dims.C
+	H := dims.H
+	W := dims.W
+	HOut := dims.HOut
+	WOut := dims.WOut
+	kernelSize := dims.KH
+	stride := dims.Stride
 
 	outIdx := 0
 	for n := 0; n < N; n++ {

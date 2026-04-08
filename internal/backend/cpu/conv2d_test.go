@@ -298,3 +298,141 @@ func TestConv2D_MatchesMockBackend(t *testing.T) {
 		}
 	}
 }
+
+func BenchmarkConv2D(b *testing.B) {
+	backend := New()
+
+	input, _ := tensor.NewRaw(tensor.Shape{1, 1, 28, 28}, tensor.Float32, tensor.CPU)
+	kernel, _ := tensor.NewRaw(tensor.Shape{6, 1, 5, 5}, tensor.Float32, tensor.CPU)
+
+	b.ResetTimer()
+	for b.Loop() {
+		backend.Conv2D(input, kernel, 1, 0)
+	}
+}
+
+func BenchmarkConv2D_Batch(b *testing.B) {
+	backend := New()
+
+	input, _ := tensor.NewRaw(tensor.Shape{64, 1, 28, 28}, tensor.Float32, tensor.CPU)
+	kernel, _ := tensor.NewRaw(tensor.Shape{32, 1, 3, 3}, tensor.Float32, tensor.CPU)
+
+	b.ResetTimer()
+	for b.Loop() {
+		backend.Conv2D(input, kernel, 1, 1)
+	}
+}
+
+func BenchmarkConv2D_MultiChannel(b *testing.B) {
+	backend := New()
+
+	input, _ := tensor.NewRaw(tensor.Shape{1, 16, 14, 14}, tensor.Float32, tensor.CPU)
+	kernel, _ := tensor.NewRaw(tensor.Shape{32, 16, 3, 3}, tensor.Float32, tensor.CPU)
+
+	b.ResetTimer()
+	for b.Loop() {
+		backend.Conv2D(input, kernel, 1, 1)
+	}
+}
+
+func BenchmarkConv2D_Stride2(b *testing.B) {
+	backend := New()
+
+	input, _ := tensor.NewRaw(tensor.Shape{1, 8, 32, 32}, tensor.Float32, tensor.CPU)
+	kernel, _ := tensor.NewRaw(tensor.Shape{16, 8, 3, 3}, tensor.Float32, tensor.CPU)
+
+	b.ResetTimer()
+	for b.Loop() {
+		backend.Conv2D(input, kernel, 2, 0)
+	}
+}
+
+func BenchmarkConv2D_Deep(b *testing.B) {
+	backend := New()
+
+	input, _ := tensor.NewRaw(tensor.Shape{8, 64, 14, 14}, tensor.Float32, tensor.CPU)
+	kernel, _ := tensor.NewRaw(tensor.Shape{128, 64, 3, 3}, tensor.Float32, tensor.CPU)
+
+	b.ResetTimer()
+	for b.Loop() {
+		backend.Conv2D(input, kernel, 1, 1)
+	}
+}
+
+func BenchmarkConv2DInputBackward_Batch(b *testing.B) {
+	backend := New()
+
+	input, _ := tensor.NewRaw(tensor.Shape{64, 1, 28, 28}, tensor.Float32, tensor.CPU)
+	kernel, _ := tensor.NewRaw(tensor.Shape{32, 1, 3, 3}, tensor.Float32, tensor.CPU)
+	grad, _ := tensor.NewRaw(tensor.Shape{64, 32, 26, 26}, tensor.Float32, tensor.CPU)
+
+	b.ResetTimer()
+	for b.Loop() {
+		backend.Conv2DInputBackward(input, kernel, grad, 1, 1)
+	}
+}
+
+func BenchmarkConv2DInputBackward_MultiChannel(b *testing.B) {
+	backend := New()
+
+	input, _ := tensor.NewRaw(tensor.Shape{1, 16, 14, 14}, tensor.Float32, tensor.CPU)
+	kernel, _ := tensor.NewRaw(tensor.Shape{32, 16, 3, 3}, tensor.Float32, tensor.CPU)
+	grad, _ := tensor.NewRaw(tensor.Shape{1, 32, 12, 12}, tensor.Float32, tensor.CPU)
+
+	b.ResetTimer()
+	for b.Loop() {
+		backend.Conv2DInputBackward(input, kernel, grad, 1, 1)
+	}
+}
+
+func BenchmarkConv2DInputBackward_Deep(b *testing.B) {
+	backend := New()
+
+	input, _ := tensor.NewRaw(tensor.Shape{8, 64, 14, 14}, tensor.Float32, tensor.CPU)
+	kernel, _ := tensor.NewRaw(tensor.Shape{128, 64, 3, 3}, tensor.Float32, tensor.CPU)
+	grad, _ := tensor.NewRaw(tensor.Shape{8, 128, 12, 12}, tensor.Float32, tensor.CPU)
+
+	b.ResetTimer()
+	for b.Loop() {
+		backend.Conv2DInputBackward(input, kernel, grad, 1, 1)
+	}
+}
+
+func BenchmarkConv2DKernelBackward_Batch(b *testing.B) {
+	backend := New()
+
+	input, _ := tensor.NewRaw(tensor.Shape{64, 1, 28, 28}, tensor.Float32, tensor.CPU)
+	kernel, _ := tensor.NewRaw(tensor.Shape{32, 1, 3, 3}, tensor.Float32, tensor.CPU)
+	grad, _ := tensor.NewRaw(tensor.Shape{64, 32, 26, 26}, tensor.Float32, tensor.CPU)
+
+	b.ResetTimer()
+	for b.Loop() {
+		backend.Conv2DKernelBackward(input, kernel, grad, 1, 1)
+	}
+}
+
+func BenchmarkConv2DKernelBackward_MultiChannel(b *testing.B) {
+	backend := New()
+
+	input, _ := tensor.NewRaw(tensor.Shape{1, 16, 14, 14}, tensor.Float32, tensor.CPU)
+	kernel, _ := tensor.NewRaw(tensor.Shape{32, 16, 3, 3}, tensor.Float32, tensor.CPU)
+	grad, _ := tensor.NewRaw(tensor.Shape{1, 32, 12, 12}, tensor.Float32, tensor.CPU)
+
+	b.ResetTimer()
+	for b.Loop() {
+		backend.Conv2DKernelBackward(input, kernel, grad, 1, 1)
+	}
+}
+
+func BenchmarkConv2DKernelBackward_Deep(b *testing.B) {
+	backend := New()
+
+	input, _ := tensor.NewRaw(tensor.Shape{8, 64, 14, 14}, tensor.Float32, tensor.CPU)
+	kernel, _ := tensor.NewRaw(tensor.Shape{128, 64, 3, 3}, tensor.Float32, tensor.CPU)
+	grad, _ := tensor.NewRaw(tensor.Shape{8, 128, 12, 12}, tensor.Float32, tensor.CPU)
+
+	b.ResetTimer()
+	for b.Loop() {
+		backend.Conv2DKernelBackward(input, kernel, grad, 1, 1)
+	}
+}

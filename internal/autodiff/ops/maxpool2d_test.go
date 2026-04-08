@@ -284,3 +284,48 @@ func TestMaxPool2DOp_Float64(t *testing.T) {
 
 	t.Log("SUCCESS: Float64 gradients correct")
 }
+
+func BenchmarkMaxPool2D_Backward_Batch(b *testing.B) {
+	backend := cpu.New()
+
+	input, _ := tensor.NewRaw(tensor.Shape{64, 1, 28, 28}, tensor.Float32, tensor.CPU)
+	grad, _ := tensor.NewRaw(tensor.Shape{64, 1, 14, 14}, tensor.Float32, tensor.CPU)
+
+	output := backend.MaxPool2D(input, 2, 2)
+	op := NewMaxPool2DOp(input, output, 2, 2)
+
+	b.ResetTimer()
+	for b.Loop() {
+		backend.MaxPool2DBackward(input, grad, op.maxIndices, 2, 2)
+	}
+}
+
+func BenchmarkMaxPool2D_Backward_MultiChannel(b *testing.B) {
+	backend := cpu.New()
+
+	input, _ := tensor.NewRaw(tensor.Shape{1, 16, 14, 14}, tensor.Float32, tensor.CPU)
+	grad, _ := tensor.NewRaw(tensor.Shape{1, 16, 12, 12}, tensor.Float32, tensor.CPU)
+
+	output := backend.MaxPool2D(input, 3, 1)
+	op := NewMaxPool2DOp(input, output, 3, 1)
+
+	b.ResetTimer()
+	for b.Loop() {
+		backend.MaxPool2DBackward(input, grad, op.maxIndices, 3, 1)
+	}
+}
+
+func BenchmarkMaxPool2D_Backward_Deep(b *testing.B) {
+	backend := cpu.New()
+
+	input, _ := tensor.NewRaw(tensor.Shape{8, 64, 14, 14}, tensor.Float32, tensor.CPU)
+	grad, _ := tensor.NewRaw(tensor.Shape{8, 64, 12, 12}, tensor.Float32, tensor.CPU)
+
+	output := backend.MaxPool2D(input, 3, 1)
+	op := NewMaxPool2DOp(input, output, 3, 1)
+
+	b.ResetTimer()
+	for b.Loop() {
+		backend.MaxPool2DBackward(input, grad, op.maxIndices, 3, 1)
+	}
+}

@@ -218,3 +218,58 @@ func TestMaxPool2D_Float64(t *testing.T) {
 		}
 	}
 }
+
+func BenchmarkMaxPool2D_Forward(b *testing.B) {
+	backend := New()
+
+	input := tensor.Randn[float32](tensor.Shape{1, 1, 28, 28}, backend).Raw()
+
+	b.ResetTimer()
+	for b.Loop() {
+		backend.MaxPool2D(input, 2, 2)
+	}
+}
+
+func BenchmarkMaxPool2D_Forward_Batch(b *testing.B) {
+	backend := New()
+
+	input := tensor.Randn[float32](tensor.Shape{64, 1, 28, 28}, backend).Raw()
+
+	b.ResetTimer()
+	for b.Loop() {
+		backend.MaxPool2D(input, 2, 2)
+	}
+}
+
+func BenchmarkMaxPool2D_Forward_MultiChannel(b *testing.B) {
+	backend := New()
+
+	input := tensor.Randn[float32](tensor.Shape{1, 16, 14, 14}, backend).Raw()
+
+	b.ResetTimer()
+	for b.Loop() {
+		backend.MaxPool2D(input, 3, 1)
+	}
+}
+
+func BenchmarkMaxPool2D_Forward_Stride2(b *testing.B) {
+	backend := New()
+
+	input := tensor.Randn[float32](tensor.Shape{1, 8, 32, 32}, backend).Raw()
+
+	b.ResetTimer()
+	for b.Loop() {
+		backend.MaxPool2D(input, 2, 2)
+	}
+}
+
+func BenchmarkMaxPool2D_Forward_Deep(b *testing.B) {
+	backend := New()
+
+	input := tensor.Randn[float32](tensor.Shape{8, 64, 14, 14}, backend).Raw()
+
+	b.ResetTimer()
+	for b.Loop() {
+		backend.MaxPool2D(input, 3, 1)
+	}
+}

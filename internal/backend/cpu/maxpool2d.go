@@ -6,13 +6,8 @@ import (
 	"github.com/born-ml/born/internal/tensor"
 )
 
-// PoolDims groups pooling dimension parameters.
-type PoolDims struct {
-	N, C, H, W      int // Input dimensions
-	KH, KW          int // Kernel dimensions
-	HOut, WOut      int // Output dimensions
-	Stride, Padding int // Pooling parameters
-}
+// PoolDims is tensor.PoolDims, defined in the shared tensor package.
+type PoolDims = tensor.PoolDims
 
 // MaxPool2D performs 2D max pooling.
 //
@@ -123,35 +118,14 @@ func maxpool2dFloat32(output, input *tensor.RawTensor, dims *PoolDims) {
 
 			// For each output position
 			for outH := 0; outH < HOut; outH++ {
-				// Compute pooling window start positions
 				hStart := outH * stride
 
 				for outW := 0; outW < WOut; outW++ {
 					wStart := outW * stride
 
-					// Find max value in pooling window
-					maxVal := float32(-1e38) // Negative infinity approximation
-
-					for kh := 0; kh < kernelSize; kh++ {
-						h := hStart + kh
-						// Pre-slice row: eliminates h*W bounds check
-						rowStart := h * W
-						rowData := channelData[rowStart : rowStart+W]
-
-						for kw := 0; kw < kernelSize; kw++ {
-							w := wStart + kw
-							// Single bounds check via pre-slice
-							val := rowData[w]
-
-							if val > maxVal {
-								maxVal = val
-							}
-						}
-					}
-
-					// Store max value
+					// Find max value in pooling window via helper.
 					outputIdx := ((n*C+c)*HOut+outH)*WOut + outW
-					outputData[outputIdx] = maxVal
+					outputData[outputIdx] = poolWindowMaxFloat32(channelData, hStart, wStart, kernelSize, W)
 				}
 			}
 		}
@@ -182,35 +156,14 @@ func maxpool2dFloat64(output, input *tensor.RawTensor, dims *PoolDims) {
 
 			// For each output position
 			for outH := 0; outH < HOut; outH++ {
-				// Compute pooling window start positions
 				hStart := outH * stride
 
 				for outW := 0; outW < WOut; outW++ {
 					wStart := outW * stride
 
-					// Find max value in pooling window
-					maxVal := float64(-1e308) // Negative infinity approximation
-
-					for kh := 0; kh < kernelSize; kh++ {
-						h := hStart + kh
-						// Pre-slice row: eliminates h*W bounds check
-						rowStart := h * W
-						rowData := channelData[rowStart : rowStart+W]
-
-						for kw := 0; kw < kernelSize; kw++ {
-							w := wStart + kw
-							// Single bounds check via pre-slice
-							val := rowData[w]
-
-							if val > maxVal {
-								maxVal = val
-							}
-						}
-					}
-
-					// Store max value
+					// Find max value in pooling window via helper.
 					outputIdx := ((n*C+c)*HOut+outH)*WOut + outW
-					outputData[outputIdx] = maxVal
+					outputData[outputIdx] = poolWindowMaxFloat64(channelData, hStart, wStart, kernelSize, W)
 				}
 			}
 		}

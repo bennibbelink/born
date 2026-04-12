@@ -95,6 +95,17 @@ func (t *Tensor[T, B]) Erf() *Tensor[T, B] {
 	return New[T, B](result, t.backend)
 }
 
+// Abs computes the absolute value of each element.
+//
+// Example:
+//
+//	x := tensor.Randn[float32](Shape{2, 3}, backend)
+//	y := x.Abs()  // |x| for each element
+func (t *Tensor[T, B]) Abs() *Tensor[T, B] {
+	result := t.backend.Abs(t.raw)
+	return New[T, B](result, t.backend)
+}
+
 // Log computes the natural logarithm (ln(x)) of each element.
 //
 // Example:

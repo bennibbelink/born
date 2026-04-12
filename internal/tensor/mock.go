@@ -552,6 +552,11 @@ func (m *MockBackend) Sign(x *RawTensor) *RawTensor {
 	})
 }
 
+// Abs computes element-wise absolute value.
+func (m *MockBackend) Abs(x *RawTensor) *RawTensor {
+	return m.unaryOp(x, math.Abs)
+}
+
 // unaryOp applies a unary operation element-wise.
 func (m *MockBackend) unaryOp(x *RawTensor, op func(float64) float64) *RawTensor {
 	result, err := NewRaw(x.Shape(), x.DType(), m.Device())

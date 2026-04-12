@@ -327,6 +327,25 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 `
 
+// absShader performs element-wise absolute value: result = |x|.
+const absShader = `
+@group(0) @binding(0) var<storage, read> input: array<f32>;
+@group(0) @binding(1) var<storage, read_write> result: array<f32>;
+
+struct Params {
+    size: u32,
+}
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    if (idx < params.size) {
+        result[idx] = abs(input[idx]);
+    }
+}
+`
+
 // scalarMulShader performs scalar multiplication: result = x * scalar.
 const scalarMulShader = `
 @group(0) @binding(0) var<storage, read> input: array<f32>;

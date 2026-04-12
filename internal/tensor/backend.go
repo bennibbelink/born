@@ -52,6 +52,7 @@ type Backend interface {
 	Sin(x *RawTensor) *RawTensor   // sine
 	Erf(x *RawTensor) *RawTensor   // error function
 	Sign(x *RawTensor) *RawTensor  // sign function
+	Abs(x *RawTensor) *RawTensor   // absolute value
 
 	// Activation functions
 	Softmax(x *RawTensor, dim int) *RawTensor // softmax along dimension

@@ -280,3 +280,35 @@ func (cpu *CPUBackend) Sign(x *tensor.RawTensor) *tensor.RawTensor {
 
 	return result
 }
+
+// helper: element-wise absolute value for various types, used by Abs implementation
+func absHelper[T uint8 | int32 | int64 | float32 | float64](src, dst []T) {
+	for i, v := range src {
+		dst[i] = T(math.Abs(float64(v)))
+	}
+}
+
+// Abs computes element-wise absolute value: abs(x).
+func (cpu *CPUBackend) Abs(x *tensor.RawTensor) *tensor.RawTensor {
+	result, err := tensor.NewRaw(x.Shape(), x.DType(), cpu.device)
+	if err != nil {
+		panic(fmt.Sprintf("abs: %v", err))
+	}
+
+	switch x.DType() {
+	case tensor.Uint8:
+		absHelper(x.AsUint8(), result.AsUint8())
+	case tensor.Int32:
+		absHelper(x.AsInt32(), result.AsInt32())
+	case tensor.Int64:
+		absHelper(x.AsInt64(), result.AsInt64())
+	case tensor.Float32:
+		absHelper(x.AsFloat32(), result.AsFloat32())
+	case tensor.Float64:
+		absHelper(x.AsFloat64(), result.AsFloat64())
+	default:
+		panic(fmt.Sprintf("abs: unsupported dtype %s (only int32/int64/float32/float64 supported)", x.DType()))
+	}
+
+	return result
+}

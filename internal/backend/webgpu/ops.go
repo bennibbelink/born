@@ -350,6 +350,36 @@ func (b *Backend) Sin(x *tensor.RawTensor) *tensor.RawTensor {
 	return result
 }
 
+// Sign computes element-wise sign function on GPU.
+func (b *Backend) Sign(x *tensor.RawTensor) *tensor.RawTensor {
+	var result *tensor.RawTensor
+	var err error
+	if b.LazyMode {
+		result, err = b.runUnaryOpLazy(x, "sign", signShader)
+	} else {
+		result, err = b.runUnaryOp(x, "sign", signShader)
+	}
+	if err != nil {
+		panic("webgpu: Sign: " + err.Error())
+	}
+	return result
+}
+
+// Abs computes element-wise absolute value on GPU.
+func (b *Backend) Abs(x *tensor.RawTensor) *tensor.RawTensor {
+	var result *tensor.RawTensor
+	var err error
+	if b.LazyMode {
+		result, err = b.runUnaryOpLazy(x, "abs", absShader)
+	} else {
+		result, err = b.runUnaryOp(x, "abs", absShader)
+	}
+	if err != nil {
+		panic("webgpu: Abs: " + err.Error())
+	}
+	return result
+}
+
 // Erf computes element-wise error function on GPU.
 func (b *Backend) Erf(x *tensor.RawTensor) *tensor.RawTensor {
 	var result *tensor.RawTensor

@@ -214,3 +214,69 @@ func (cpu *CPUBackend) Erf(x *tensor.RawTensor) *tensor.RawTensor {
 
 	return result
 }
+
+// helper: unsigned uint8
+func signUint8(src, dst []uint8) {
+	for i := range src {
+		if src[i] > 0 {
+			dst[i] = 1
+		} else {
+			dst[i] = 0
+		}
+	}
+}
+
+// helper: signed integers (int32, int64)
+func signInts[T int32 | int64](src, dst []T) {
+	for i, v := range src {
+		switch {
+		case v > 0:
+			dst[i] = T(1)
+		case v < 0:
+			dst[i] = T(-1)
+		default:
+			dst[i] = T(0)
+		}
+	}
+}
+
+// helper: floats (float32, float64) with NaN preservation
+func signFloats[T float32 | float64](src, dst []T) {
+	for i, v := range src {
+		switch {
+		case math.IsNaN(float64(v)):
+			dst[i] = T(math.NaN())
+		case v > 0:
+			dst[i] = T(1.0)
+		case v < 0:
+			dst[i] = T(-1.0)
+		default:
+			dst[i] = T(0.0)
+		}
+	}
+}
+
+// Sign computes element-wise sign function: sign(x).
+func (cpu *CPUBackend) Sign(x *tensor.RawTensor) *tensor.RawTensor {
+	result, err := tensor.NewRaw(x.Shape(), x.DType(), cpu.device)
+	if err != nil {
+		panic(fmt.Sprintf("sign: %v", err))
+	}
+
+	switch x.DType() {
+	case tensor.Uint8:
+		signUint8(x.AsUint8(), result.AsUint8())
+	case tensor.Int32:
+		signInts(x.AsInt32(), result.AsInt32())
+	case tensor.Int64:
+		signInts(x.AsInt64(), result.AsInt64())
+	case tensor.Float32:
+		signFloats(x.AsFloat32(), result.AsFloat32())
+	case tensor.Float64:
+		signFloats(x.AsFloat64(), result.AsFloat64())
+	default:
+		panic(fmt.Sprintf("sign: unsupported dtype %s (only uint8/int32/int64/float32/float64 supported)", x.DType()))
+	}
+
+	return result
+}

@@ -536,6 +536,22 @@ func (m *MockBackend) Sin(x *RawTensor) *RawTensor {
 	return m.unaryOp(x, math.Sin)
 }
 
+// Sign computes element-wise sign function: -1 for negative, 0 for zero, 1 for positive.
+func (m *MockBackend) Sign(x *RawTensor) *RawTensor {
+	return m.unaryOp(x, func(v float64) float64 {
+		switch {
+		case math.IsNaN(v):
+			return math.NaN()
+		case v > 0:
+			return 1.0
+		case v < 0:
+			return -1.0
+		default:
+			return 0.0
+		}
+	})
+}
+
 // unaryOp applies a unary operation element-wise.
 func (m *MockBackend) unaryOp(x *RawTensor, op func(float64) float64) *RawTensor {
 	result, err := NewRaw(x.Shape(), x.DType(), m.Device())

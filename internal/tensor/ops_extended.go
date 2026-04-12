@@ -152,6 +152,17 @@ func (t *Tensor[T, B]) Sin() *Tensor[T, B] {
 	return New[T, B](result, t.backend)
 }
 
+// Sign computes the sign of each element.
+//
+// Example:
+//
+//	x := tensor.Arange[float32](0, 10, backend)
+//	y := x.Sign()  // sign(x) for each element
+func (t *Tensor[T, B]) Sign() *Tensor[T, B] {
+	result := t.backend.Sign(t.raw)
+	return New[T, B](result, t.backend)
+}
+
 // ============================================================================
 // Activation Functions (Phase 1 - CRITICAL)
 // ============================================================================

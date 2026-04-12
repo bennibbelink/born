@@ -21,7 +21,7 @@ func TestSign_ForwardUint8(t *testing.T) {
 	// Test cases for int32
 	tests := []signTestCase[uint8]{
 		{"basic", []uint8{0, 1}, []uint8{0, 1}, tensor.Shape{2}},
-		{"edges", []uint8{uint8(math.Inf(1))}, []uint8{1}, tensor.Shape{1}},
+		{"edges", []uint8{uint8(math.MaxUint8)}, []uint8{1}, tensor.Shape{1}},
 	}
 
 	for _, tt := range tests {
@@ -51,7 +51,7 @@ func TestSign_ForwardInt32(t *testing.T) {
 	// Test cases for int32
 	tests := []signTestCase[int32]{
 		{"basic", []int32{-1, 0, 1}, []int32{-1, 0, 1}, tensor.Shape{3}},
-		{"edges", []int32{int32(math.Inf(-1)), int32(math.Inf(1))}, []int32{-1, 1}, tensor.Shape{2}},
+		{"edges", []int32{int32(math.MinInt32), int32(math.MaxInt32)}, []int32{-1, 1}, tensor.Shape{2}},
 	}
 
 	for _, tt := range tests {
@@ -81,7 +81,7 @@ func TestSign_ForwardInt64(t *testing.T) {
 	// Test cases for int64
 	tests := []signTestCase[int64]{
 		{"basic", []int64{-1, 0, 1}, []int64{-1, 0, 1}, tensor.Shape{3}},
-		{"edges", []int64{int64(math.Inf(-1)), int64(math.Inf(1))}, []int64{-1, 1}, tensor.Shape{2}},
+		{"edges", []int64{int64(math.MinInt64), int64(math.MaxInt64)}, []int64{-1, 1}, tensor.Shape{2}},
 	}
 
 	for _, tt := range tests {

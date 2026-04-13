@@ -95,6 +95,20 @@ func (t *Tensor[T, B]) Erf() *Tensor[T, B] {
 	return New[T, B](result, t.backend)
 }
 
+// Abs computes the absolute value of each element.
+//
+// For signed integer dtypes, this uses two's-complement wraparound semantics:
+// abs(MinInt) == MinInt. This matches Burn, NumPy, and PyTorch behavior.
+//
+// Example:
+//
+//	x := tensor.Randn[float32](Shape{2, 3}, backend)
+//	y := x.Abs()  // |x| for each element
+func (t *Tensor[T, B]) Abs() *Tensor[T, B] {
+	result := t.backend.Abs(t.raw)
+	return New[T, B](result, t.backend)
+}
+
 // Log computes the natural logarithm (ln(x)) of each element.
 //
 // Example:
@@ -149,6 +163,21 @@ func (t *Tensor[T, B]) Cos() *Tensor[T, B] {
 //	y := x.Sin()  // sin(x) for each element
 func (t *Tensor[T, B]) Sin() *Tensor[T, B] {
 	result := t.backend.Sin(t.raw)
+	return New[T, B](result, t.backend)
+}
+
+// Sign computes the sign of each element.
+//
+// Returns -1 for negative, 0 for zero, +1 for positive. For unsigned integer
+// dtypes (uint8), only 0 and +1 are produced since negative values cannot be
+// represented.
+//
+// Example:
+//
+//	x := tensor.Arange[float32](0, 10, backend)
+//	y := x.Sign()  // sign(x) for each element
+func (t *Tensor[T, B]) Sign() *Tensor[T, B] {
+	result := t.backend.Sign(t.raw)
 	return New[T, B](result, t.backend)
 }
 

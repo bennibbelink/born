@@ -24,7 +24,7 @@ func NewErfOp(a, output *tensor.RawTensor) *ErfOp {
 	}
 }
 
-// Backward computes input gradients for division.
+// Backward computes input gradients for erf.
 func (op *ErfOp) Backward(outputGrad *tensor.RawTensor, backend tensor.Backend) []*tensor.RawTensor {
 	a := op.input
 

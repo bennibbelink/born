@@ -3,6 +3,8 @@
 package webgpu
 
 import (
+	"fmt"
+
 	"github.com/born-ml/born/internal/tensor"
 )
 
@@ -346,6 +348,46 @@ func (b *Backend) Sin(x *tensor.RawTensor) *tensor.RawTensor {
 	}
 	if err != nil {
 		panic("webgpu: Sin: " + err.Error())
+	}
+	return result
+}
+
+// Sign computes element-wise sign function on GPU.
+//
+// Only supports float32 dtype for now. Will raise a panic if called with unsupported dtype.
+func (b *Backend) Sign(x *tensor.RawTensor) *tensor.RawTensor {
+	if x.DType() != tensor.Float32 {
+		panic(fmt.Sprintf("webgpu: Sign currently supports only Float32, got %s", x.DType()))
+	}
+	var result *tensor.RawTensor
+	var err error
+	if b.LazyMode {
+		result, err = b.runUnaryOpLazy(x, "sign", signShader)
+	} else {
+		result, err = b.runUnaryOp(x, "sign", signShader)
+	}
+	if err != nil {
+		panic("webgpu: Sign: " + err.Error())
+	}
+	return result
+}
+
+// Abs computes element-wise absolute value on GPU.
+//
+// Only supports float32 dtype for now. Will raise a panic if called with unsupported dtype.
+func (b *Backend) Abs(x *tensor.RawTensor) *tensor.RawTensor {
+	if x.DType() != tensor.Float32 {
+		panic(fmt.Sprintf("webgpu: Abs currently supports only Float32, got %s", x.DType()))
+	}
+	var result *tensor.RawTensor
+	var err error
+	if b.LazyMode {
+		result, err = b.runUnaryOpLazy(x, "abs", absShader)
+	} else {
+		result, err = b.runUnaryOp(x, "abs", absShader)
+	}
+	if err != nil {
+		panic("webgpu: Abs: " + err.Error())
 	}
 	return result
 }

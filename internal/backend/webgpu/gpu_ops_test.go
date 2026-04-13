@@ -214,6 +214,80 @@ func TestErfGPU(t *testing.T) {
 	}
 }
 
+func TestSignGPU(t *testing.T) {
+	backend, err := New()
+	if err != nil {
+		t.Skipf("WebGPU not available: %v", err)
+	}
+	defer backend.Release()
+
+	// Create input tensors
+	aData := []float32{-1.0, 0.0, 1.0}
+	shape := tensor.Shape{3}
+
+	aRaw, _ := tensor.NewRaw(shape, tensor.Float32, tensor.CPU)
+	copy(aRaw.AsFloat32(), aData)
+
+	// Upload to GPU
+	aGPU := backend.UploadTensor(aRaw)
+	defer aGPU.Release()
+
+	// Run GPU sign function
+	cGPU := backend.SignGPU(aGPU)
+	defer cGPU.Release()
+
+	// Transfer result back to CPU
+	result := cGPU.ToCPU()
+
+	// Verify result
+	expected := []float32{-1.0, 0.0, 1.0}
+	resultData := result.AsFloat32()
+
+	const eps = 1e-5
+	for i, exp := range expected {
+		if math.Abs(float64(resultData[i]-exp)) > eps {
+			t.Errorf("SignGPU[%d]: expected %v, got %v", i, exp, resultData[i])
+		}
+	}
+}
+
+func TestAbsGPU(t *testing.T) {
+	backend, err := New()
+	if err != nil {
+		t.Skipf("WebGPU not available: %v", err)
+	}
+	defer backend.Release()
+
+	// Create input tensors
+	aData := []float32{-5.0, -1.0, 0.0, 1.0, 5.0}
+	shape := tensor.Shape{5}
+
+	aRaw, _ := tensor.NewRaw(shape, tensor.Float32, tensor.CPU)
+	copy(aRaw.AsFloat32(), aData)
+
+	// Upload to GPU
+	aGPU := backend.UploadTensor(aRaw)
+	defer aGPU.Release()
+
+	// Run GPU absolute value function
+	cGPU := backend.AbsGPU(aGPU)
+	defer cGPU.Release()
+
+	// Transfer result back to CPU
+	result := cGPU.ToCPU()
+
+	// Verify result
+	expected := []float32{5.0, 1.0, 0.0, 1.0, 5.0}
+	resultData := result.AsFloat32()
+
+	const eps = 1e-5
+	for i, exp := range expected {
+		if math.Abs(float64(resultData[i]-exp)) > eps {
+			t.Errorf("AbsGPU[%d]: expected %v, got %v", i, exp, resultData[i])
+		}
+	}
+}
+
 // TestMatMulGPU tests GPU-native matrix multiplication.
 func TestMatMulGPU(t *testing.T) {
 	backend, err := New()

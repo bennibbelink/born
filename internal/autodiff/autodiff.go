@@ -646,6 +646,34 @@ func (b *AutodiffBackend[B]) Sin(x *tensor.RawTensor) *tensor.RawTensor {
 	return result
 }
 
+// Sign computes element-wise sign and records the operation.
+func (b *AutodiffBackend[B]) Sign(x *tensor.RawTensor) *tensor.RawTensor {
+	defer x.ForceNonUnique()()
+
+	result := b.inner.Sign(x)
+
+	if b.tape.IsRecording() {
+		op := ops.NewSignOp(x, result)
+		b.tape.Record(op)
+	}
+
+	return result
+}
+
+// Abs computes element-wise absolute value and records the operation.
+func (b *AutodiffBackend[B]) Abs(x *tensor.RawTensor) *tensor.RawTensor {
+	defer x.ForceNonUnique()()
+
+	result := b.inner.Abs(x)
+
+	if b.tape.IsRecording() {
+		op := ops.NewAbsOp(x, result)
+		b.tape.Record(op)
+	}
+
+	return result
+}
+
 // SumDim sums tensor along a dimension and records the operation.
 func (b *AutodiffBackend[B]) SumDim(x *tensor.RawTensor, dim int, keepDim bool) *tensor.RawTensor {
 	defer x.ForceNonUnique()()

@@ -126,6 +126,12 @@ func TestSign_ForwardFloat32(t *testing.T) {
 
 			outputData := result.AsFloat32()
 			for i, v := range outputData {
+				if math.IsNaN(float64(tt.want[i])) {
+					if !math.IsNaN(float64(v)) {
+						t.Errorf("sign(NaN) = %v, want NaN", v)
+					}
+					continue
+				}
 				if math.Abs(float64(v-tt.want[i])) > epsilon {
 					t.Errorf("sign(%f) = %f, want %f", tt.a[i], v, tt.want[i])
 				}
@@ -156,6 +162,12 @@ func TestSign_ForwardFloat64(t *testing.T) {
 
 			outputData := result.AsFloat64()
 			for i, v := range outputData {
+				if math.IsNaN(float64(tt.want[i])) {
+					if !math.IsNaN(float64(v)) {
+						t.Errorf("sign(NaN) = %v, want NaN", v)
+					}
+					continue
+				}
 				if math.Abs(v-tt.want[i]) > epsilon {
 					t.Errorf("sign(%f) = %f, want %f", tt.a[i], v, tt.want[i])
 				}

@@ -27,7 +27,6 @@ func (op *AbsOp) Backward(outputGrad *tensor.RawTensor, backend tensor.Backend) 
 
 	signA := backend.Sign(a)
 	gradA := backend.Mul(outputGrad, signA)
-	gradA = reduceBroadcast(gradA, a.Shape(), backend)
 
 	return []*tensor.RawTensor{gradA}
 }

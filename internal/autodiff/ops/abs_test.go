@@ -36,6 +36,12 @@ func TestAbs_ForwardFloat64(t *testing.T) {
 
 			outputData := result.AsFloat64()
 			for i, v := range outputData {
+				if math.IsNaN(tt.want[i]) {
+					if !math.IsNaN(float64(v)) {
+						t.Errorf("abs(NaN) = %v, want NaN", v)
+					}
+					continue
+				}
 				if math.Abs(v-tt.want[i]) > epsilon {
 					t.Errorf("abs(%f) = %f, want %f", tt.a[i], v, tt.want[i])
 				}
@@ -71,6 +77,12 @@ func TestAbs_ForwardFloat32(t *testing.T) {
 
 			outputData := result.AsFloat32()
 			for i, v := range outputData {
+				if math.IsNaN(float64(tt.want[i])) {
+					if !math.IsNaN(float64(v)) {
+						t.Errorf("abs(NaN) = %v, want NaN", v)
+					}
+					continue
+				}
 				if math.Abs(float64(v-tt.want[i])) > epsilon {
 					t.Errorf("abs(%f) = %f, want %f", tt.a[i], v, tt.want[i])
 				}
@@ -89,6 +101,7 @@ func TestAbs_ForwardInt32(t *testing.T) {
 		shape tensor.Shape
 	}{
 		{"basic", []int32{-2, -1, 0, 1, 2}, []int32{2, 1, 0, 1, 2}, tensor.Shape{5}},
+		{"edges", []int32{math.MinInt32, math.MaxInt32}, []int32{math.MinInt32, math.MaxInt32}, tensor.Shape{2}},
 		{"zero", []int32{0, 0, 0}, []int32{0, 0, 0}, tensor.Shape{3}},
 		{"2d", []int32{-1, -2, 3, -4}, []int32{1, 2, 3, 4}, tensor.Shape{2, 2}},
 	}
@@ -124,6 +137,7 @@ func TestAbs_ForwardInt64(t *testing.T) {
 		shape tensor.Shape
 	}{
 		{"basic", []int64{-2, -1, 0, 1, 2}, []int64{2, 1, 0, 1, 2}, tensor.Shape{5}},
+		{"edges", []int64{math.MinInt64, math.MaxInt64}, []int64{math.MinInt64, math.MaxInt64}, tensor.Shape{2}},
 		{"zero", []int64{0, 0, 0}, []int64{0, 0, 0}, tensor.Shape{3}},
 		{"2d", []int64{-1, -2, 3, -4}, []int64{1, 2, 3, 4}, tensor.Shape{2, 2}},
 	}

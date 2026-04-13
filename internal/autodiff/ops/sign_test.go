@@ -20,8 +20,7 @@ func TestSign_ForwardUint8(t *testing.T) {
 
 	// Test cases for int32
 	tests := []signTestCase[uint8]{
-		{"basic", []uint8{0, 1}, []uint8{0, 1}, tensor.Shape{2}},
-		{"edges", []uint8{uint8(math.MaxUint8)}, []uint8{1}, tensor.Shape{1}},
+		{"basic", []uint8{0, 1, math.MaxUint8}, []uint8{0, 1, 1}, tensor.Shape{3}},
 	}
 
 	for _, tt := range tests {

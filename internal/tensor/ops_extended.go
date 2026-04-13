@@ -97,6 +97,9 @@ func (t *Tensor[T, B]) Erf() *Tensor[T, B] {
 
 // Abs computes the absolute value of each element.
 //
+// For signed integer dtypes, this uses two's-complement wraparound semantics:
+// abs(MinInt) == MinInt. This matches Burn, NumPy, and PyTorch behavior.
+//
 // Example:
 //
 //	x := tensor.Randn[float32](Shape{2, 3}, backend)
@@ -164,6 +167,10 @@ func (t *Tensor[T, B]) Sin() *Tensor[T, B] {
 }
 
 // Sign computes the sign of each element.
+//
+// Returns -1 for negative, 0 for zero, +1 for positive. For unsigned integer
+// dtypes (uint8), only 0 and +1 are produced since negative values cannot be
+// represented.
 //
 // Example:
 //

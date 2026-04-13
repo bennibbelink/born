@@ -215,7 +215,7 @@ func (cpu *CPUBackend) Erf(x *tensor.RawTensor) *tensor.RawTensor {
 	return result
 }
 
-// helper: unsigned uint8
+// signUint8 computes sign for unsigned bytes: 0 → 0, positive → 1.
 func signUint8(src, dst []uint8) {
 	for i := range src {
 		if src[i] > 0 {
@@ -226,7 +226,7 @@ func signUint8(src, dst []uint8) {
 	}
 }
 
-// helper: signed integers (int32, int64)
+// signInts computes sign for signed integers (int32, int64).
 func signInts[T int32 | int64](src, dst []T) {
 	for i, v := range src {
 		switch {
@@ -240,7 +240,7 @@ func signInts[T int32 | int64](src, dst []T) {
 	}
 }
 
-// helper: floats (float32, float64) with NaN preservation
+// signFloats computes sign for floating-point numbers (float32, float64) with NaN preservation.
 func signFloats[T float32 | float64](src, dst []T) {
 	for i, v := range src {
 		switch {
@@ -281,8 +281,25 @@ func (cpu *CPUBackend) Sign(x *tensor.RawTensor) *tensor.RawTensor {
 	return result
 }
 
-// helper: element-wise absolute value for various types, used by Abs implementation
-func absHelper[T uint8 | int32 | int64 | float32 | float64](src, dst []T) {
+// absUint8 — identity (absolute value of unsigned is itself).
+func absUint8(src, dst []uint8) {
+	copy(dst, src)
+}
+
+// absInts — two's-complement wrapping abs for signed integers.
+// Note: abs(MinInt) == MinInt (wraparound), matching Burn and NumPy/PyTorch.
+func absInts[T int32 | int64](src, dst []T) {
+	for i, v := range src {
+		if v < 0 {
+			dst[i] = -v // wraps for MinInt, which is the intended semantics
+		} else {
+			dst[i] = v
+		}
+	}
+}
+
+// absFloats — float abs via math.Abs (handles NaN/±Inf correctly).
+func absFloats[T float32 | float64](src, dst []T) {
 	for i, v := range src {
 		dst[i] = T(math.Abs(float64(v)))
 	}
@@ -297,15 +314,15 @@ func (cpu *CPUBackend) Abs(x *tensor.RawTensor) *tensor.RawTensor {
 
 	switch x.DType() {
 	case tensor.Uint8:
-		absHelper(x.AsUint8(), result.AsUint8())
+		absUint8(x.AsUint8(), result.AsUint8())
 	case tensor.Int32:
-		absHelper(x.AsInt32(), result.AsInt32())
+		absInts(x.AsInt32(), result.AsInt32())
 	case tensor.Int64:
-		absHelper(x.AsInt64(), result.AsInt64())
+		absInts(x.AsInt64(), result.AsInt64())
 	case tensor.Float32:
-		absHelper(x.AsFloat32(), result.AsFloat32())
+		absFloats(x.AsFloat32(), result.AsFloat32())
 	case tensor.Float64:
-		absHelper(x.AsFloat64(), result.AsFloat64())
+		absFloats(x.AsFloat64(), result.AsFloat64())
 	default:
 		panic(fmt.Sprintf("abs: unsupported dtype %s (only int32/int64/float32/float64 supported)", x.DType()))
 	}

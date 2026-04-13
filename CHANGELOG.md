@@ -5,6 +5,19 @@ All notable changes to the Born ML Framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `Sign` and `Abs` element-wise tensor operations — full vertical slice ([#59](https://github.com/born-ml/born/pull/59) by [@bennibbelink](https://github.com/bennibbelink))
+  - `Backend.Sign` / `Backend.Abs` interface methods
+  - CPU implementation with per-type helpers: `uint8`, `int32`, `int64`, `float32`, `float64`
+  - Integer `Abs` uses two's-complement wraparound semantics (`abs(MinInt) == MinInt`), matching Burn / NumPy / PyTorch
+  - WebGPU implementation (float32 only, with dtype guards)
+  - Autodiff support: `SignOp` (zero gradient) and `AbsOp` (grad × sign)
+  - Mock backend, public `Tensor.Sign()` / `Tensor.Abs()` API
+  - Comprehensive tests including NaN, ±Inf, `MinInt`/`MaxInt` edge cases
+
 ## [0.7.16] - 2026-04-10
 
 ### 🎉 Community Contributions — @gmohmad & @bennibbelink

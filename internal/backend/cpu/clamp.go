@@ -8,6 +8,9 @@ import (
 )
 
 // Clamp restricts tensor values element-wise to [minBound, maxBound].
+// If minBound > maxBound, all values are set to maxBound.
+// Supported dtypes: int32, int64, float32, float64.
+// Panics if bounds are nil, if bounds and tensor dtype do not match, or if bounds are NaN (for floats).
 func (cpu *CPUBackend) Clamp(input *tensor.RawTensor, minBound, maxBound any) *tensor.RawTensor {
 	if minBound == nil || maxBound == nil {
 		panic("clamp: min and max bounds cannot be nil")

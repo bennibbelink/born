@@ -1,8 +1,6 @@
 package ops
 
 import (
-	"fmt"
-
 	"github.com/born-ml/born/internal/tensor"
 )
 
@@ -34,48 +32,44 @@ func NewClampOp(input *tensor.RawTensor, minBound, maxBound any, output *tensor.
 // grad_input = grad_output * (1 if min <= input <= max, else 0).
 func (op *ClampOp) Backward(outputGrad *tensor.RawTensor, backend tensor.Backend) []*tensor.RawTensor {
 	input := op.input
+	minBound := op.minBound
+	maxBound := op.maxBound
+
+	var maskedGrad *tensor.RawTensor
 
 	switch input.DType() {
 	case tensor.Int32:
-		minBound := tensor.CheckScalarDtype[int32](op.minBound)
-		maxBound := tensor.CheckScalarDtype[int32](op.maxBound)
-		maskedGrad := clampBackwardGeneric(outputGrad, input, minBound, maxBound, backend)
-		return []*tensor.RawTensor{maskedGrad}
+		maskedGrad = clampBackwardGeneric(outputGrad, input, minBound.(int32), maxBound.(int32), backend)
 	case tensor.Int64:
-		minBound := tensor.CheckScalarDtype[int64](op.minBound)
-		maxBound := tensor.CheckScalarDtype[int64](op.maxBound)
-		maskedGrad := clampBackwardGeneric(outputGrad, input, minBound, maxBound, backend)
-		return []*tensor.RawTensor{maskedGrad}
+		maskedGrad = clampBackwardGeneric(outputGrad, input, minBound.(int64), maxBound.(int64), backend)
 
 	case tensor.Float32:
-		minBound := tensor.CheckScalarDtype[float32](op.minBound)
-		maxBound := tensor.CheckScalarDtype[float32](op.maxBound)
-		maskedGrad := clampBackwardGeneric(outputGrad, input, minBound, maxBound, backend)
-		return []*tensor.RawTensor{maskedGrad}
+		maskedGrad = clampBackwardGeneric(outputGrad, input, minBound.(float32), maxBound.(float32), backend)
 
 	case tensor.Float64:
-		minBound := tensor.CheckScalarDtype[float64](op.minBound)
-		maxBound := tensor.CheckScalarDtype[float64](op.maxBound)
-		maskedGrad := clampBackwardGeneric(outputGrad, input, minBound, maxBound, backend)
-		return []*tensor.RawTensor{maskedGrad}
+		maskedGrad = clampBackwardGeneric(outputGrad, input, minBound.(float64), maxBound.(float64), backend)
 	default:
 		panic("clamp: unsupported dtype (only int32/int64/float32/float64 supported)")
 	}
+
+	return []*tensor.RawTensor{maskedGrad}
 }
 
 func clampBackwardGeneric[T int32 | int64 | float32 | float64](outputGrad, input *tensor.RawTensor, minBound, maxBound T, backend tensor.Backend) *tensor.RawTensor {
 	minValues := tensor.Full(input.Shape(), minBound, backend).Raw()
 	maxValues := tensor.Full(input.Shape(), maxBound, backend).Raw()
 
-	minMask := backend.GreaterEqual(input, minValues)
-	maxMask := backend.LowerEqual(input, maxValues)
-	combinedMask := backend.And(minMask, maxMask)
+	ones := tensor.Ones[T](input.Shape(), backend).Raw()
+	zeros := tensor.Zeros[T](input.Shape(), backend).Raw()
 
-	maskNumeric, err := tensor.Cast(combinedMask, input.DType())
-	if err != nil {
-		panic(fmt.Sprintf("clamp: failed to cast mask: %v", err))
-	}
-	maskedGrad := backend.Mul(outputGrad, maskNumeric)
+	// Check if original input is within bounds: min <= input <= max
+	minMask := backend.GreaterEqual(input, minValues) // bool where input >= min
+	maxMask := backend.LowerEqual(input, maxValues)   // bool where input <= max
+	combinedMask := backend.And(minMask, maxMask)     // bool where min <= input <= max
+
+	// Convert bool mask to dtype T for multiplication
+	mask := backend.Where(combinedMask, ones, zeros)
+	maskedGrad := backend.Mul(outputGrad, mask) // grad_output * mask
 
 	return maskedGrad
 }

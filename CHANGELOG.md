@@ -5,6 +5,34 @@ All notable changes to the Born ML Framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-04-26
+
+### Changed
+
+- **WebGPU backend migrated from go-webgpu to gogpu/wgpu** ([#40](https://github.com/born-ml/born/issues/40))
+  - Replaced `github.com/go-webgpu/webgpu` with `github.com/gogpu/wgpu` v0.26.8 (pure Go, zero CGO)
+  - **No more shared library dependency** — no `.dll`/`.so`/`.dylib` downloads needed
+  - True single binary deployment: `go build` produces executable with GPU support built in
+  - Vulkan primary compute backend — stable across all platforms and GPU vendors
+  - WGSL shaders unchanged — full backward compatibility
+  - Fixed: PipelineLayout kept alive for Vulkan SetBindGroup (was freed prematurely)
+  - Fixed: lazy ops immediate submit (prevents buffer lifetime issues with DestroyQueue)
+  - Fixed: lazy chain `copyGPUBuffer` immediate submit (prevents stale data in chained ops)
+  - Fixed: `runtime.KeepAlive` guards prevent GC finalizer races on GPU buffers
+  - Fixed: `Poll(PollWait)` in Release() ensures GPU idle before resource destruction
+  - All 105 GPU tests pass, validated with real model training (HRM, 20 epochs, 0 crashes)
+
+### Added
+
+- `Sign` and `Abs` element-wise tensor operations — full vertical slice ([#59](https://github.com/born-ml/born/pull/59) by [@bennibbelink](https://github.com/bennibbelink))
+  - `Backend.Sign` / `Backend.Abs` interface methods
+  - CPU implementation with per-type helpers: `uint8`, `int32`, `int64`, `float32`, `float64`
+  - Integer `Abs` uses two's-complement wraparound semantics (`abs(MinInt) == MinInt`), matching Burn / NumPy / PyTorch
+  - WebGPU implementation (float32 only, with dtype guards)
+  - Autodiff support: `SignOp` (zero gradient) and `AbsOp` (grad × sign)
+  - Mock backend, public `Tensor.Sign()` / `Tensor.Abs()` API
+  - Comprehensive tests including NaN, ±Inf, `MinInt`/`MaxInt` edge cases
+
 ## [0.7.16] - 2026-04-10
 
 ### 🎉 Community Contributions — @gmohmad & @bennibbelink

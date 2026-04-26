@@ -37,39 +37,30 @@ func (op *ClampOp) Backward(outputGrad *tensor.RawTensor, backend tensor.Backend
 
 	switch input.DType() {
 	case tensor.Int32:
-		minBound, maxBound := checkBoundsDtype[int32](op.minBound, op.maxBound)
+		minBound := tensor.CheckScalarDtype[int32](op.minBound)
+		maxBound := tensor.CheckScalarDtype[int32](op.maxBound)
 		maskedGrad := clampBackwardGeneric(outputGrad, input, minBound, maxBound, backend)
 		return []*tensor.RawTensor{maskedGrad}
 	case tensor.Int64:
-		minBound, maxBound := checkBoundsDtype[int64](op.minBound, op.maxBound)
+		minBound := tensor.CheckScalarDtype[int64](op.minBound)
+		maxBound := tensor.CheckScalarDtype[int64](op.maxBound)
 		maskedGrad := clampBackwardGeneric(outputGrad, input, minBound, maxBound, backend)
 		return []*tensor.RawTensor{maskedGrad}
 
 	case tensor.Float32:
-		minBound, maxBound := checkBoundsDtype[float32](op.minBound, op.maxBound)
+		minBound := tensor.CheckScalarDtype[float32](op.minBound)
+		maxBound := tensor.CheckScalarDtype[float32](op.maxBound)
 		maskedGrad := clampBackwardGeneric(outputGrad, input, minBound, maxBound, backend)
 		return []*tensor.RawTensor{maskedGrad}
 
 	case tensor.Float64:
-		minBound, maxBound := checkBoundsDtype[float64](op.minBound, op.maxBound)
+		minBound := tensor.CheckScalarDtype[float64](op.minBound)
+		maxBound := tensor.CheckScalarDtype[float64](op.maxBound)
 		maskedGrad := clampBackwardGeneric(outputGrad, input, minBound, maxBound, backend)
 		return []*tensor.RawTensor{maskedGrad}
 	default:
 		panic("clamp: unsupported dtype (only int32/int64/float32/float64 supported)")
 	}
-}
-
-func checkBoundsDtype[T int32 | int64 | float32 | float64](minBound, maxBound any) (T, T) {
-	minCasted, ok := minBound.(T)
-	if !ok {
-		panic(fmt.Sprintf("clamp: expected %T min bound, got %T", new(T), minBound))
-	}
-	maxCasted, ok := maxBound.(T)
-	if !ok {
-		panic(fmt.Sprintf("clamp: expected %T max bound, got %T", new(T), maxBound))
-	}
-
-	return minCasted, maxCasted
 }
 
 func clampBackwardGeneric[T int32 | int64 | float32 | float64](outputGrad, input *tensor.RawTensor, minBound, maxBound T, backend tensor.Backend) *tensor.RawTensor {

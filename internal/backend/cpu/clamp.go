@@ -1,7 +1,6 @@
 package cpu
 
 import (
-	"fmt"
 	"math"
 
 	"github.com/born-ml/born/internal/tensor"
@@ -21,19 +20,22 @@ func (cpu *CPUBackend) Clamp(input *tensor.RawTensor, minBound, maxBound any) *t
 	// otherwise, perform normal clamp operation
 	switch input.DType() {
 	case tensor.Int32:
-		castedMin, castedMax := checkBoundsDtype[int32](minBound, maxBound)
+		castedMin := tensor.CheckScalarDtype[int32](minBound)
+		castedMax := tensor.CheckScalarDtype[int32](maxBound)
 		if castedMin > castedMax {
 			return tensor.Full(input.Shape(), castedMax, cpu).Raw()
 		}
 		result = clampGeneric(input, castedMin, castedMax, cpu)
 	case tensor.Int64:
-		castedMin, castedMax := checkBoundsDtype[int64](minBound, maxBound)
+		castedMin := tensor.CheckScalarDtype[int64](minBound)
+		castedMax := tensor.CheckScalarDtype[int64](maxBound)
 		if castedMin > castedMax {
 			return tensor.Full(input.Shape(), castedMax, cpu).Raw()
 		}
 		result = clampGeneric(input, castedMin, castedMax, cpu)
 	case tensor.Float32:
-		castedMin, castedMax := checkBoundsDtype[float32](minBound, maxBound)
+		castedMin := tensor.CheckScalarDtype[float32](minBound)
+		castedMax := tensor.CheckScalarDtype[float32](maxBound)
 		checkNaN(castedMin)
 		checkNaN(castedMax)
 		if castedMin > castedMax {
@@ -41,7 +43,8 @@ func (cpu *CPUBackend) Clamp(input *tensor.RawTensor, minBound, maxBound any) *t
 		}
 		result = clampGeneric(input, castedMin, castedMax, cpu)
 	case tensor.Float64:
-		castedMin, castedMax := checkBoundsDtype[float64](minBound, maxBound)
+		castedMin := tensor.CheckScalarDtype[float64](minBound)
+		castedMax := tensor.CheckScalarDtype[float64](maxBound)
 		checkNaN(castedMin)
 		checkNaN(castedMax)
 		if castedMin > castedMax {
@@ -53,22 +56,6 @@ func (cpu *CPUBackend) Clamp(input *tensor.RawTensor, minBound, maxBound any) *t
 	}
 
 	return result
-}
-
-// checkBoundsDtype checks if the bounds and tensor dtype match.
-//
-// Panics if they do not match.
-func checkBoundsDtype[T int32 | int64 | float32 | float64](minBound, maxBound any) (T, T) {
-	minCasted, ok := minBound.(T)
-	if !ok {
-		panic(fmt.Sprintf("clamp: expected %T min bound, got %T", new(T), minBound))
-	}
-	maxCasted, ok := maxBound.(T)
-	if !ok {
-		panic(fmt.Sprintf("clamp: expected %T max bound, got %T", new(T), maxBound))
-	}
-
-	return minCasted, maxCasted
 }
 
 // checkNaN checks if the value is NaN and panics if it is.

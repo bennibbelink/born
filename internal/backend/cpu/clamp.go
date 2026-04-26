@@ -1,6 +1,7 @@
 package cpu
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/born-ml/born/internal/tensor"
@@ -12,36 +13,38 @@ func (cpu *CPUBackend) Clamp(input *tensor.RawTensor, minBound, maxBound any) *t
 		panic("clamp: min and max bounds cannot be nil")
 	}
 
-	if input.DType() == tensor.Float32 {
-		checkNaNBounds[float32](minBound, maxBound)
-	} else if input.DType() == tensor.Float64 {
-		checkNaNBounds[float64](minBound, maxBound)
-	}
-
 	var result *tensor.RawTensor
 	// when minBound > maxBound set all values to maxBound
 	// otherwise, perform normal clamp operation
 	switch input.DType() {
 	case tensor.Int32:
-		if minBound.(int32) > maxBound.(int32) {
-			return tensor.Full(input.Shape(), maxBound.(int32), cpu).Raw()
+		castedMin, castedMax := checkBoundsDtype[int32](minBound, maxBound)
+		if castedMin > castedMax {
+			return tensor.Full(input.Shape(), castedMax, cpu).Raw()
 		}
-		result = clampGeneric(input, minBound.(int32), maxBound.(int32), cpu)
+		result = clampGeneric(input, castedMin, castedMax, cpu)
 	case tensor.Int64:
-		if minBound.(int64) > maxBound.(int64) {
-			return tensor.Full(input.Shape(), maxBound.(int64), cpu).Raw()
+		castedMin, castedMax := checkBoundsDtype[int64](minBound, maxBound)
+		if castedMin > castedMax {
+			return tensor.Full(input.Shape(), castedMax, cpu).Raw()
 		}
-		result = clampGeneric(input, minBound.(int64), maxBound.(int64), cpu)
+		result = clampGeneric(input, castedMin, castedMax, cpu)
 	case tensor.Float32:
-		if minBound.(float32) > maxBound.(float32) {
-			return tensor.Full(input.Shape(), maxBound.(float32), cpu).Raw()
+		castedMin, castedMax := checkBoundsDtype[float32](minBound, maxBound)
+		checkNaN(castedMin)
+		checkNaN(castedMax)
+		if castedMin > castedMax {
+			return tensor.Full(input.Shape(), castedMax, cpu).Raw()
 		}
-		result = clampGeneric(input, minBound.(float32), maxBound.(float32), cpu)
+		result = clampGeneric(input, castedMin, castedMax, cpu)
 	case tensor.Float64:
-		if minBound.(float64) > maxBound.(float64) {
-			return tensor.Full(input.Shape(), maxBound.(float64), cpu).Raw()
+		castedMin, castedMax := checkBoundsDtype[float64](minBound, maxBound)
+		checkNaN(castedMin)
+		checkNaN(castedMax)
+		if castedMin > castedMax {
+			return tensor.Full(input.Shape(), castedMax, cpu).Raw()
 		}
-		result = clampGeneric(input, minBound.(float64), maxBound.(float64), cpu)
+		result = clampGeneric(input, castedMin, castedMax, cpu)
 	default:
 		panic("clamp: unsupported dtype (only int32/int64/float32/float64 supported)")
 	}
@@ -49,9 +52,26 @@ func (cpu *CPUBackend) Clamp(input *tensor.RawTensor, minBound, maxBound any) *t
 	return result
 }
 
-func checkNaNBounds[T float32 | float64](minBound, maxBound any) {
-	if math.IsNaN(float64(minBound.(T))) || math.IsNaN(float64(maxBound.(T))) {
-		panic("clamp: min and max bounds cannot be NaN")
+// checkBoundsDtype checks if the bounds and tensor dtype match.
+//
+// Panics if they do not match.
+func checkBoundsDtype[T int32 | int64 | float32 | float64](minBound, maxBound any) (T, T) {
+	minCasted, ok := minBound.(T)
+	if !ok {
+		panic(fmt.Sprintf("clamp: expected %T min bound, got %T", new(T), minBound))
+	}
+	maxCasted, ok := maxBound.(T)
+	if !ok {
+		panic(fmt.Sprintf("clamp: expected %T max bound, got %T", new(T), maxBound))
+	}
+
+	return minCasted, maxCasted
+}
+
+// checkNaN checks if the value is NaN and panics if it is.
+func checkNaN[T float32 | float64](v T) {
+	if math.IsNaN(float64(v)) {
+		panic("clamp: bounds cannot be NaN")
 	}
 }
 

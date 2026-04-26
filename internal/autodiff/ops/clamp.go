@@ -33,8 +33,6 @@ func NewClampOp(input *tensor.RawTensor, minBound, maxBound any, output *tensor.
 func (op *ClampOp) Backward(outputGrad *tensor.RawTensor, backend tensor.Backend) []*tensor.RawTensor {
 	input := op.input
 
-	var maskedGrad *tensor.RawTensor
-
 	switch input.DType() {
 	case tensor.Int32:
 		minBound := tensor.CheckScalarDtype[int32](op.minBound)

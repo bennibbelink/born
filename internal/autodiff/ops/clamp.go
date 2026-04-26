@@ -32,27 +32,35 @@ func NewClampOp(input *tensor.RawTensor, minBound, maxBound any, output *tensor.
 // grad_input = grad_output * (1 if min <= input <= max, else 0).
 func (op *ClampOp) Backward(outputGrad *tensor.RawTensor, backend tensor.Backend) []*tensor.RawTensor {
 	input := op.input
-	minBound := op.minBound
-	maxBound := op.maxBound
 
 	var maskedGrad *tensor.RawTensor
 
 	switch input.DType() {
 	case tensor.Int32:
-		maskedGrad = clampBackwardGeneric(outputGrad, input, minBound.(int32), maxBound.(int32), backend)
+		minBound := tensor.CheckScalarDtype[int32](op.minBound)
+		maxBound := tensor.CheckScalarDtype[int32](op.maxBound)
+		maskedGrad := clampBackwardGeneric(outputGrad, input, minBound, maxBound, backend)
+		return []*tensor.RawTensor{maskedGrad}
 	case tensor.Int64:
-		maskedGrad = clampBackwardGeneric(outputGrad, input, minBound.(int64), maxBound.(int64), backend)
+		minBound := tensor.CheckScalarDtype[int64](op.minBound)
+		maxBound := tensor.CheckScalarDtype[int64](op.maxBound)
+		maskedGrad := clampBackwardGeneric(outputGrad, input, minBound, maxBound, backend)
+		return []*tensor.RawTensor{maskedGrad}
 
 	case tensor.Float32:
-		maskedGrad = clampBackwardGeneric(outputGrad, input, minBound.(float32), maxBound.(float32), backend)
+		minBound := tensor.CheckScalarDtype[float32](op.minBound)
+		maxBound := tensor.CheckScalarDtype[float32](op.maxBound)
+		maskedGrad := clampBackwardGeneric(outputGrad, input, minBound, maxBound, backend)
+		return []*tensor.RawTensor{maskedGrad}
 
 	case tensor.Float64:
-		maskedGrad = clampBackwardGeneric(outputGrad, input, minBound.(float64), maxBound.(float64), backend)
+		minBound := tensor.CheckScalarDtype[float64](op.minBound)
+		maxBound := tensor.CheckScalarDtype[float64](op.maxBound)
+		maskedGrad := clampBackwardGeneric(outputGrad, input, minBound, maxBound, backend)
+		return []*tensor.RawTensor{maskedGrad}
 	default:
 		panic("clamp: unsupported dtype (only int32/int64/float32/float64 supported)")
 	}
-
-	return []*tensor.RawTensor{maskedGrad}
 }
 
 func clampBackwardGeneric[T int32 | int64 | float32 | float64](outputGrad, input *tensor.RawTensor, minBound, maxBound T, backend tensor.Backend) *tensor.RawTensor {

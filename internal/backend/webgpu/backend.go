@@ -1,18 +1,29 @@
 //go:build windows
 
 // Package webgpu implements the WebGPU backend for GPU-accelerated tensor operations.
-// Uses go-webgpu (github.com/go-webgpu/webgpu) for zero-CGO WebGPU bindings.
+// Uses gogpu/wgpu (github.com/gogpu/wgpu) for pure Go, zero-CGO WebGPU bindings.
 package webgpu
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"unsafe"
 
 	"github.com/born-ml/born/internal/tensor"
-	"github.com/go-webgpu/webgpu/wgpu"
 	"github.com/gogpu/gputypes"
+	wgpu "github.com/gogpu/wgpu"
+	_ "github.com/gogpu/wgpu/hal/allbackends"
 )
+
+// pipelineEntry caches a compute pipeline together with its layouts.
+// The pipeline layout must remain alive because Vulkan references it
+// during vkCmdBindDescriptorSets on every SetBindGroup call.
+type pipelineEntry struct {
+	pipeline       *wgpu.ComputePipeline
+	layout         *wgpu.BindGroupLayout
+	pipelineLayout *wgpu.PipelineLayout
+}
 
 // Backend implements tensor operations on GPU using WebGPU.
 type Backend struct {
@@ -23,11 +34,11 @@ type Backend struct {
 
 	// Shader and pipeline cache
 	shaders   map[string]*wgpu.ShaderModule
-	pipelines map[string]*wgpu.ComputePipeline
+	pipelines map[string]pipelineEntry
 	mu        sync.RWMutex
 
 	// Device info
-	adapterInfo *wgpu.AdapterInfoGo
+	adapterInfo *wgpu.AdapterInfo
 
 	// Buffer pool for memory management
 	bufferPool *BufferPool
@@ -45,54 +56,42 @@ type Backend struct {
 		activeBuffers       int64
 		mu                  sync.RWMutex
 	}
-
-	// Command batching for lazy mode performance optimization.
-	// Commands are accumulated and submitted together to reduce GPU sync overhead.
-	pendingCommands []*wgpu.CommandBuffer
-	pendingMu       sync.Mutex
-	maxBatchSize    int // Maximum commands before auto-flush (0 = no limit)
 }
 
 // New creates a new WebGPU backend.
 // Returns an error if WebGPU is not available or initialization fails.
-func New() (backend *Backend, err error) {
-	// Recover from panic if wgpu_native library is not found.
-	defer func() {
-		if r := recover(); r != nil {
-			backend = nil
-			err = fmt.Errorf("webgpu: native library not available: %v", r)
-		}
-	}()
-
-	// Create WebGPU instance
-	instance, createErr := wgpu.CreateInstance(nil)
-	if createErr != nil {
-		return nil, fmt.Errorf("webgpu: failed to create instance: %w", createErr)
+func New() (*Backend, error) {
+	// Create WebGPU instance. Vulkan is the primary compute backend —
+	// stable across all platforms and GPU vendors.
+	instance, err := wgpu.CreateInstance(&wgpu.InstanceDescriptor{
+		Backends: wgpu.BackendsVulkan,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("webgpu: failed to create instance: %w", err)
 	}
 
-	// Request adapter (GPU)
-	adapter, adapterErr := instance.RequestAdapter(&wgpu.RequestAdapterOptions{
+	// Request adapter (GPU).
+	adapter, err := instance.RequestAdapter(&wgpu.RequestAdapterOptions{
 		PowerPreference: gputypes.PowerPreferenceHighPerformance,
 	})
-	if adapterErr != nil {
+	if err != nil {
 		instance.Release()
-		return nil, fmt.Errorf("webgpu: failed to request adapter: %w", adapterErr)
+		return nil, fmt.Errorf("webgpu: failed to request adapter: %w", err)
 	}
 
-	// Get adapter info (optional - don't fail if unavailable)
-	adapterInfo, _ := adapter.GetInfo()
-	// Note: adapterInfo may be nil if GetInfo fails, which is OK
+	// Get adapter info. In gogpu/wgpu, Info() returns AdapterInfo by value.
+	info := adapter.Info()
 
-	// Request device
-	device, deviceErr := adapter.RequestDevice(nil)
-	if deviceErr != nil {
+	// Request device.
+	device, err := adapter.RequestDevice(nil)
+	if err != nil {
 		adapter.Release()
 		instance.Release()
-		return nil, fmt.Errorf("webgpu: failed to request device: %w", deviceErr)
+		return nil, fmt.Errorf("webgpu: failed to request device: %w", err)
 	}
 
-	// Get default queue
-	queue := device.GetQueue()
+	// Get default queue. In gogpu/wgpu the queue is accessed via device.Queue().
+	queue := device.Queue()
 	if queue == nil {
 		device.Release()
 		adapter.Release()
@@ -106,8 +105,8 @@ func New() (backend *Backend, err error) {
 		device:      device,
 		queue:       queue,
 		shaders:     make(map[string]*wgpu.ShaderModule),
-		pipelines:   make(map[string]*wgpu.ComputePipeline),
-		adapterInfo: adapterInfo,
+		pipelines:   make(map[string]pipelineEntry),
+		adapterInfo: &info,
 		bufferPool:  NewBufferPool(device),
 		LazyMode:    true, // Default: lazy mode enabled for optimal performance
 	}
@@ -124,59 +123,19 @@ func (b *Backend) SetLazyMode(enabled bool) {
 	b.LazyMode = enabled
 }
 
-// queueCommand adds a command buffer to the pending queue for batch submission.
-// This reduces GPU sync overhead by submitting multiple commands at once.
-// Commands are automatically flushed when reading data or when batch size limit is reached.
-func (b *Backend) queueCommand(cmdBuffer *wgpu.CommandBuffer) {
-	b.pendingMu.Lock()
-	defer b.pendingMu.Unlock()
-
-	b.pendingCommands = append(b.pendingCommands, cmdBuffer)
-
-	// Auto-flush if batch size limit is reached (0 = no limit)
-	if b.maxBatchSize > 0 && len(b.pendingCommands) >= b.maxBatchSize {
-		b.flushCommandsLocked()
-	}
-}
-
-// flushCommands submits all pending command buffers to the GPU queue.
-// This is called automatically before reading data from GPU.
-func (b *Backend) flushCommands() {
-	b.pendingMu.Lock()
-	defer b.pendingMu.Unlock()
-	b.flushCommandsLocked()
-}
-
-// flushCommandsLocked submits all pending command buffers (must hold pendingMu lock).
-func (b *Backend) flushCommandsLocked() {
-	if len(b.pendingCommands) == 0 {
-		return
-	}
-	b.queue.Submit(b.pendingCommands...)
-	b.pendingCommands = b.pendingCommands[:0]
-}
-
-// FlushCommands submits all pending command buffers to the GPU queue.
-// Call this when you need to ensure all queued operations are executed.
-// Note: This is called automatically before reading data from GPU buffers.
-func (b *Backend) FlushCommands() {
-	b.flushCommands()
-}
-
-// SetMaxBatchSize sets the maximum number of commands to accumulate before auto-flush.
-// Set to 0 (default) to disable auto-flush limit.
-// Typical values: 32-128 for balanced latency/throughput.
-func (b *Backend) SetMaxBatchSize(size int) {
-	b.pendingMu.Lock()
-	defer b.pendingMu.Unlock()
-	b.maxBatchSize = size
-}
+// flushCommands is a no-op retained for backwards compatibility.
+// All GPU operations now use immediate submit to prevent buffer lifetime issues.
+func (b *Backend) flushCommands() {}
 
 // Release releases all WebGPU resources.
 // Must be called when the backend is no longer needed.
 func (b *Backend) Release() {
-	// Flush any pending commands before releasing resources
-	b.flushCommands()
+	// Ensure GPU is fully idle before destroying resources.
+	// Without this, rapid create/destroy cycles (e.g. test suites) can
+	// overwhelm the driver on iGPUs with shared memory.
+	if b.device != nil {
+		b.device.Poll(wgpu.PollWait)
+	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -187,9 +146,13 @@ func (b *Backend) Release() {
 		b.bufferPool = nil
 	}
 
-	// Release pipelines
-	for _, p := range b.pipelines {
-		p.Release()
+	// Release pipelines and their associated layouts.
+	for _, entry := range b.pipelines {
+		entry.pipeline.Release()
+		entry.layout.Release()
+		if entry.pipelineLayout != nil {
+			entry.pipelineLayout.Release()
+		}
 	}
 	b.pipelines = nil
 
@@ -199,11 +162,9 @@ func (b *Backend) Release() {
 	}
 	b.shaders = nil
 
-	// Release WebGPU objects
-	if b.queue != nil {
-		b.queue.Release()
-		b.queue = nil
-	}
+	// Release WebGPU objects.
+	// Note: Queue is owned by Device in gogpu/wgpu and released via device.Release().
+	b.queue = nil
 	if b.device != nil {
 		b.device.Release()
 		b.device = nil
@@ -221,7 +182,7 @@ func (b *Backend) Release() {
 // Name returns the backend name.
 func (b *Backend) Name() string {
 	if b.adapterInfo != nil {
-		return fmt.Sprintf("WebGPU (%s)", b.adapterInfo.Device)
+		return fmt.Sprintf("WebGPU (%s)", b.adapterInfo.Name)
 	}
 	return "WebGPU"
 }
@@ -232,64 +193,73 @@ func (b *Backend) Device() tensor.Device {
 }
 
 // AdapterInfo returns information about the GPU adapter.
-func (b *Backend) AdapterInfo() *wgpu.AdapterInfoGo {
+func (b *Backend) AdapterInfo() *wgpu.AdapterInfo {
 	return b.adapterInfo
 }
 
-// IsAvailable checks if WebGPU is available on this system.
-func IsAvailable() (available bool) {
-	// Recover from panic if wgpu_native library is not found.
-	defer func() {
-		if r := recover(); r != nil {
-			available = false
-		}
-	}()
-
-	instance, err := wgpu.CreateInstance(nil)
+// IsAvailable checks if WebGPU with compute shader support is available.
+// Returns false on software renderers that don't support compute pipelines.
+func IsAvailable() bool {
+	backend, err := New()
 	if err != nil {
 		return false
 	}
-	defer instance.Release()
+	defer backend.Release()
 
-	adapter, err := instance.RequestAdapter(nil)
+	// Verify compute shaders actually work by creating a minimal pipeline.
+	// Software renderers pass adapter/device creation but fail here.
+	shader, err := backend.device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label: "availability-check",
+		WGSL:  "@compute @workgroup_size(1) fn main() {}",
+	})
 	if err != nil {
 		return false
 	}
-	adapter.Release()
+	defer shader.Release()
+
+	bgl, err := backend.device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{})
+	if err != nil {
+		return false
+	}
+	defer bgl.Release()
+
+	pl, err := backend.device.CreatePipelineLayout(&wgpu.PipelineLayoutDescriptor{
+		BindGroupLayouts: []*wgpu.BindGroupLayout{bgl},
+	})
+	if err != nil {
+		return false
+	}
+	defer pl.Release()
+
+	pipeline, err := backend.device.CreateComputePipeline(&wgpu.ComputePipelineDescriptor{
+		Label: "availability-check", Layout: pl, Module: shader, EntryPoint: "main",
+	})
+	if err != nil {
+		return false
+	}
+	pipeline.Release()
 
 	return true
 }
 
 // ListAdapters returns information about all available GPU adapters.
-func ListAdapters() (adapters []*wgpu.AdapterInfoGo, err error) {
-	// Recover from panic if wgpu_native library is not found.
-	defer func() {
-		if r := recover(); r != nil {
-			adapters = nil
-			err = fmt.Errorf("webgpu: native library not available: %v", r)
-		}
-	}()
-
-	instance, createErr := wgpu.CreateInstance(nil)
-	if createErr != nil {
-		return nil, fmt.Errorf("webgpu: failed to create instance: %w", createErr)
+func ListAdapters() ([]*wgpu.AdapterInfo, error) {
+	instance, err := wgpu.CreateInstance(nil)
+	if err != nil {
+		return nil, fmt.Errorf("webgpu: failed to create instance: %w", err)
 	}
 	defer instance.Release()
 
-	// For now, just return the default adapter
-	// WebGPU spec doesn't have a way to enumerate all adapters
-	adapter, adapterErr := instance.RequestAdapter(nil)
-	if adapterErr != nil {
-		return nil, fmt.Errorf("webgpu: no adapters available: %w", adapterErr)
+	// WebGPU spec doesn't expose adapter enumeration; return the default adapter.
+	adapter, err := instance.RequestAdapter(nil)
+	if err != nil {
+		return nil, fmt.Errorf("webgpu: no adapters available: %w", err)
 	}
 	defer adapter.Release()
 
-	info, infoErr := adapter.GetInfo()
-	if infoErr != nil {
-		return nil, fmt.Errorf("webgpu: failed to get adapter info: %w", infoErr)
-	}
-
-	return []*wgpu.AdapterInfoGo{info}, nil
+	// In gogpu/wgpu, Info() returns AdapterInfo by value (no error).
+	info := adapter.Info()
+	return []*wgpu.AdapterInfo{&info}, nil
 }
 
 // MemoryStats represents GPU memory usage statistics.
@@ -400,11 +370,59 @@ func (b *Backend) Embedding(weight, indices *tensor.RawTensor) *tensor.RawTensor
 }
 
 // ReadGPUBuffer implements tensor.LazyBackend interface.
-// Reads data from a GPU buffer to CPU memory.
-// bufferPtr must be *wgpu.Buffer.
+// Reads data from a GPU staging buffer (MapRead | CopyDst) to CPU memory.
+// bufferPtr must point to a *wgpu.Buffer created with BufferUsageMapRead.
+//
+// The lazy path (runBinaryOpLazy, runUnaryOpLazy, etc.) creates a staging buffer
+// in the same encoder as the compute pass (unified encoder pattern). The staging
+// buffer already has the computed data after the batch submit completes.
+//
+// Sequence:
+//  1. flushCommands() — submit all batched compute+copy commands.
+//  2. Poll(PollWait) — block until the GPU completes the submitted commands.
+//     This is required because Map()'s internal Poll(PollPoll) may resolve
+//     immediately using a prior submission's fence when a backend has received
+//     multiple submits (DX12/Vulkan fence ordering artifact with batched commands).
+//  3. Map the staging buffer (blocks until the GPU fence resolves).
+//  4. Copy data to CPU slice, Unmap.
 func (b *Backend) ReadGPUBuffer(bufferPtr unsafe.Pointer, size uint64) ([]byte, error) {
+	// Flush all pending batched commands (compute + CopyBufferToBuffer to staging).
+	b.flushCommands()
+
+	// Wait for ALL pending GPU work to complete before mapping.
+	// Without this Poll, Map()'s internal Poll(PollPoll) can return "done"
+	// prematurely on backends (DX12) that signal fences conservatively,
+	// causing the staging buffer to be read before the compute pass has
+	// finished writing to it — resulting in zeros.
+	// This matches the pattern used by readBuffer() for the split-encoder path.
+	b.device.Poll(wgpu.PollWait)
+
 	buffer := (*wgpu.Buffer)(bufferPtr)
-	return b.readBuffer(buffer, size)
+
+	// Map the staging buffer. After Poll(PollWait) the GPU is idle, so
+	// Map() returns immediately without blocking on the fence.
+	ctx := context.Background()
+	if err := buffer.Map(ctx, wgpu.MapModeRead, 0, size); err != nil {
+		return nil, fmt.Errorf("webgpu: ReadGPUBuffer: failed to map staging buffer: %w", err)
+	}
+	defer func() { _ = buffer.Unmap() }()
+
+	mappedRange, err := buffer.MappedRange(0, size)
+	if err != nil {
+		return nil, fmt.Errorf("webgpu: ReadGPUBuffer: failed to get mapped range: %w", err)
+	}
+	defer mappedRange.Release()
+
+	data := mappedRange.Bytes()
+	if data == nil {
+		return nil, fmt.Errorf("webgpu: ReadGPUBuffer: MappedRange.Bytes() returned nil (buffer may have been unmapped or released)")
+	}
+	if uint64(len(data)) < size {
+		return nil, fmt.Errorf("webgpu: ReadGPUBuffer: MappedRange.Bytes() returned %d bytes but need %d (buffer size mismatch)", len(data), size)
+	}
+	result := make([]byte, size)
+	copy(result, data)
+	return result, nil
 }
 
 // ReleaseGPUBuffer implements tensor.LazyBackend interface.

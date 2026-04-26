@@ -5,31 +5,35 @@ package webgpu
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
+	"runtime"
 	"unsafe"
 
 	"github.com/born-ml/born/internal/tensor"
-	"github.com/go-webgpu/webgpu/wgpu"
 	"github.com/gogpu/gputypes"
+	wgpu "github.com/gogpu/wgpu"
 )
 
-// createLazyResult creates a lazy RawTensor that keeps data on GPU.
-// The buffer is NOT released - ownership is transferred to the lazy tensor.
-// Data will be transferred from GPU only when Data() is called.
+// createLazyResult creates a lazy RawTensor backed by a GPU staging buffer.
+// The stagingBuf must have MapRead | CopyDst usage and must already have been
+// populated via CopyBufferToBuffer inside the same encoder as the compute pass.
 //
-// This is the key optimization for Phase 3 Integration:
-// - No readBuffer() call during operation.
-// - Data stays on GPU until explicitly needed.
-// - Chained operations can be batched.
-func (b *Backend) createLazyResult(buffer *wgpu.Buffer, bufferSize uint64, shape tensor.Shape, dtype tensor.DataType) (*tensor.RawTensor, error) {
-	// Create lazy GPU data with backend reference for later readBuffer()
-	gpuData := tensor.NewLazyGPUData(unsafe.Pointer(buffer), bufferSize, b) //nolint:gosec // G103: Required for GPU buffer tracking
+// Ownership of stagingBuf is transferred to the lazy tensor:
+// - It is NOT released here — the caller must NOT defer-release it.
+// - It will be released when LazyGPUData.Release() is called (GC or explicit).
+//
+// When Data() is called on the result tensor, ReadGPUBuffer() Maps the staging
+// buffer directly — no additional copy encoder is needed.
+func (b *Backend) createLazyResult(stagingBuf *wgpu.Buffer, bufferSize uint64, shape tensor.Shape, dtype tensor.DataType) (*tensor.RawTensor, error) {
+	// Create lazy GPU data referencing the staging (MapRead) buffer.
+	gpuData := tensor.NewLazyGPUData(unsafe.Pointer(stagingBuf), bufferSize, b) //nolint:gosec // G103: Required for GPU buffer tracking
 
-	// Create lazy tensor - CPU buffer allocated but not filled
+	// Create lazy tensor — CPU buffer allocated but not filled until Data() is called.
 	result, err := tensor.NewLazyRaw(shape, dtype, tensor.WebGPU, gpuData)
 	if err != nil {
-		// If tensor creation fails, release the GPU buffer
-		buffer.Release()
+		// If tensor creation fails, release the staging buffer.
+		stagingBuf.Release()
 		return nil, err
 	}
 
@@ -67,11 +71,8 @@ func (b *Backend) runBinaryOpLazy(a, other *tensor.RawTensor, shaderName, shader
 
 	numElements := a.NumElements()
 
-	// Compile shader
 	shader := b.compileShader(shaderName, shaderCode)
-
-	// Get or create pipeline
-	pipeline := b.getOrCreatePipeline(shaderName, shader)
+	entry := b.getOrCreatePipeline(shaderName, shader, bglBinary)
 
 	// Create GPU buffers for inputs (these can be released after submission)
 	bufferA := b.createBufferFromTensor(a)
@@ -81,57 +82,141 @@ func (b *Backend) runBinaryOpLazy(a, other *tensor.RawTensor, shaderName, shader
 	defer bufferOther.Release()
 
 	resultSize := uint64(a.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
-	// Create result buffer - NO defer Release! Ownership transfers to lazy tensor
-	bufferResult := b.device.CreateBuffer(&wgpu.BufferDescriptor{
-		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc | gputypes.BufferUsageCopyDst,
+
+	// Intermediate result buffer: written by the compute shader, source for the copy.
+	// Released at end of function — the encoder holds its own reference.
+	bufferResult, err := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc,
 		Size:  resultSize,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("runBinaryOpLazy: create result buffer: %w", err)
+	}
+	defer bufferResult.Release()
+
+	// Staging buffer: CopyBufferToBuffer destination + MapRead for CPU readback.
+	// CopySrc is needed so this buffer can be re-used as source when chaining
+	// lazy ops (createBufferFromTensor → copyGPUBuffer).
+	// Ownership transfers to the lazy tensor — NO defer Release.
+	stagingBuf, err := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+		Usage: gputypes.BufferUsageMapRead | gputypes.BufferUsageCopyDst | gputypes.BufferUsageCopySrc,
+		Size:  resultSize,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("runBinaryOpLazy: create staging buffer: %w", err)
+	}
 
 	// Create uniform buffer for params
 	params := b.createParamsBuffer(numElements)
 	defer params.Release()
 
-	// Get bind group layout and create bind group
-	bindGroupLayout := pipeline.GetBindGroupLayout(0)
-	bindGroup := b.device.CreateBindGroupSimple(bindGroupLayout, []wgpu.BindGroupEntry{
-		wgpu.BufferBindingEntry(0, bufferA, 0, resultSize),
-		wgpu.BufferBindingEntry(1, bufferOther, 0, resultSize),
-		wgpu.BufferBindingEntry(2, bufferResult, 0, resultSize),
-		wgpu.BufferBindingEntry(3, params, 0, 16),
+	bg := b.createBindGroupFromBuffers(entry.layout, []bindGroupBuffer{
+		bufBinding(bufferA, resultSize),
+		bufBinding(bufferOther, resultSize),
+		bufBinding(bufferResult, resultSize),
+		bufBinding(params, 16),
 	})
-	defer bindGroup.Release()
+	defer bg.Release()
 
-	// Execute compute pass
-	encoder := b.device.CreateCommandEncoder(nil)
-	computePass := encoder.BeginComputePass(nil)
-
-	computePass.SetPipeline(pipeline)
-	computePass.SetBindGroup(0, bindGroup, nil)
-
+	encoder, encErr := b.device.CreateCommandEncoder(nil)
+	if encErr != nil {
+		stagingBuf.Release()
+		return nil, fmt.Errorf("runBinaryOpLazy: create encoder: %w", encErr)
+	}
+	computePass, cpErr := encoder.BeginComputePass(nil)
+	if cpErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: BeginComputePass error: %v", cpErr))
+	}
+	computePass.SetPipeline(entry.pipeline)
+	computePass.SetBindGroup(0, bg, nil)
 	workgroups := uint32((numElements + workgroupSize - 1) / workgroupSize) //nolint:gosec // G115: integer overflow conversion int -> uint32
-	computePass.DispatchWorkgroups(workgroups, 1, 1)
-	computePass.End()
+	computePass.Dispatch(workgroups, 1, 1)
+	if endErr := computePass.End(); endErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: compute pass end error: %v", endErr))
+	}
+	// finishAndSubmitLazy appends CopyBufferToBuffer, finishes the encoder, and submits
+	// immediately. Immediate submit is required so lastSubmissionIndex is updated BEFORE
+	// the deferred bufferResult.Release() fires (buffers deferred at index 0 get
+	// destroyed on the next DestroyQueue.Triage call, corrupting in-flight GPU copies).
+	return b.finishAndSubmitLazy(encoder, bufferResult, stagingBuf, resultSize, a.Shape(), a.DType(), "runBinaryOpLazy")
+}
 
-	cmdBuffer := encoder.Finish(nil)
-	b.queueCommand(cmdBuffer) // Batch instead of immediate submit
+// createStagingBuffer creates a MapRead | CopyDst buffer of the given size.
+// Returns the staging buffer; the caller is responsible for releasing it
+// (or transferring ownership to a lazy tensor via createLazyResult).
+func (b *Backend) createStagingBuffer(size uint64) (*wgpu.Buffer, error) {
+	buf, err := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+		Usage: gputypes.BufferUsageMapRead | gputypes.BufferUsageCopyDst | gputypes.BufferUsageCopySrc,
+		Size:  size,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("webgpu: failed to create staging buffer: %w", err)
+	}
+	return buf, nil
+}
 
-	// Create LAZY result - NO readBuffer() call!
-	// Data will be transferred from GPU only when Data() is called
-	return b.createLazyResult(bufferResult, resultSize, a.Shape(), a.DType())
+// finishAndSubmitLazy finalizes encoder (appending a copy from resultBuf to stagingBuf),
+// submits the command buffer IMMEDIATELY, and returns a lazy tensor.
+// stagingBuf ownership is transferred to the returned tensor (no caller release).
+// resultBuf is NOT transferred — caller must defer-release it.
+//
+// IMPORTANT: This function submits immediately (not batched) to ensure the submission
+// index is updated BEFORE the caller's deferred resultBuf.Release() fires.
+// If we batched (queueCommand), the defer would fire with lastSubmissionIndex=0,
+// causing the DestroyQueue to destroy resultBuf before the GPU copy reads it.
+// See: BUG-LAZY-DEFER-RELEASE (buffers deferred at index 0 destroyed on next triage).
+func (b *Backend) finishAndSubmitLazy(
+	encoder *wgpu.CommandEncoder,
+	resultBuf *wgpu.Buffer,
+	stagingBuf *wgpu.Buffer,
+	resultSize uint64,
+	shape tensor.Shape,
+	dtype tensor.DataType,
+	opName string,
+) (*tensor.RawTensor, error) {
+	// CopyBufferToBuffer in the SAME encoder, after the compute pass ended,
+	// before Finish(). This is the unified encoder pattern.
+	encoder.CopyBufferToBuffer(resultBuf, 0, stagingBuf, 0, resultSize)
+	cmdBuffer, err := encoder.Finish()
+	if err != nil {
+		stagingBuf.Release()
+		return nil, fmt.Errorf("%s: finish encoder: %w", opName, err)
+	}
+	// Submit immediately so lastSubmissionIndex is updated before the caller's
+	// defer resultBuf.Release() fires. This prevents premature buffer destruction.
+	if _, err := b.queue.Submit(cmdBuffer); err != nil {
+		stagingBuf.Release()
+		return nil, fmt.Errorf("%s: submit: %w", opName, err)
+	}
+
+	return b.createLazyResult(stagingBuf, resultSize, shape, dtype)
 }
 
 // copyGPUBuffer creates a GPU-to-GPU copy without CPU round-trip.
 // This is critical for LazyMode performance - avoids GPU→CPU→GPU transfers.
 func (b *Backend) copyGPUBuffer(srcBuffer *wgpu.Buffer, size uint64) *wgpu.Buffer {
-	dstBuffer := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+	dstBuffer, err := b.device.CreateBuffer(&wgpu.BufferDescriptor{
 		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc | gputypes.BufferUsageCopyDst,
 		Size:  size,
 	})
+	if err != nil {
+		panic(fmt.Sprintf("webgpu: copyGPUBuffer: failed to create dst buffer: %v", err))
+	}
 
-	encoder := b.device.CreateCommandEncoder(nil)
+	encoder, encErr := b.device.CreateCommandEncoder(nil)
+	if encErr != nil {
+		panic(fmt.Sprintf("webgpu: copyGPUBuffer: failed to create encoder: %v", encErr))
+	}
 	encoder.CopyBufferToBuffer(srcBuffer, 0, dstBuffer, 0, size)
-	cmdBuffer := encoder.Finish(nil)
-	b.queueCommand(cmdBuffer) // Batch instead of immediate submit
+	cmdBuffer, finErr := encoder.Finish()
+	if finErr != nil {
+		panic(fmt.Sprintf("webgpu: copyGPUBuffer: failed to finish encoder: %v", finErr))
+	}
+	if _, err := b.queue.Submit(cmdBuffer); err != nil {
+		panic(fmt.Sprintf("webgpu: copyGPUBuffer: submit failed: %v", err))
+	}
 
 	return dstBuffer
 }
@@ -141,9 +226,13 @@ func (b *Backend) copyGPUBuffer(srcBuffer *wgpu.Buffer, size uint64) *wgpu.Buffe
 func (b *Backend) createBufferFromTensor(t *tensor.RawTensor) *wgpu.Buffer {
 	// Check if tensor already has GPU data
 	if gpuData := t.GPUData(); gpuData != nil && !gpuData.IsRealized() {
-		// Tensor has unrealized GPU data - use GPU→GPU copy
+		// Tensor has unrealized GPU data - use GPU→GPU copy.
+		// KeepAlive prevents GC from collecting gpuData (and running its
+		// finalizer which releases the buffer) while copyGPUBuffer uses it.
 		existingBuffer := (*wgpu.Buffer)(gpuData.BufferPtr())
-		return b.copyGPUBuffer(existingBuffer, gpuData.Size())
+		result := b.copyGPUBuffer(existingBuffer, gpuData.Size())
+		runtime.KeepAlive(gpuData)
+		return result
 	}
 
 	// CPU tensor - upload data to GPU
@@ -209,9 +298,8 @@ func (b *Backend) runMatMulLazy(a, other *tensor.RawTensor) (*tensor.RawTensor, 
 		return nil, &lazyError{msg: "matmul: shape mismatch"}
 	}
 
-	// Compile shader
 	shader := b.compileShader("matmul", matmulShader)
-	pipeline := b.getOrCreatePipeline("matmul", shader)
+	entry := b.getOrCreatePipeline("matmul", shader, bglBinary)
 
 	// Create GPU buffers (support lazy chaining)
 	bufferA := b.createBufferFromTensor(a)
@@ -223,11 +311,21 @@ func (b *Backend) runMatMulLazy(a, other *tensor.RawTensor) (*tensor.RawTensor, 
 	resultShape := tensor.Shape{int(M), int(N)}
 	resultSize := uint64(int(M) * int(N) * 4) //nolint:gosec // G115: integer overflow conversion int -> uint64
 
-	// Create result buffer - NO defer Release! Ownership transfers to lazy tensor
-	bufferResult := b.device.CreateBuffer(&wgpu.BufferDescriptor{
-		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc | gputypes.BufferUsageCopyDst,
+	// Storage buffer for compute output; released at end of function.
+	bufferResult, err := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc,
 		Size:  resultSize,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("runMatMulLazy: create result buffer: %w", err)
+	}
+	defer bufferResult.Release()
+
+	// Staging buffer (MapRead | CopyDst): ownership transfers to lazy tensor.
+	stagingBuf, err := b.createStagingBuffer(resultSize)
+	if err != nil {
+		return nil, fmt.Errorf("runMatMulLazy: %w", err)
+	}
 
 	// Create params buffer
 	params := make([]byte, 16)
@@ -237,34 +335,37 @@ func (b *Backend) runMatMulLazy(a, other *tensor.RawTensor) (*tensor.RawTensor, 
 	bufferParams := b.createUniformBuffer(params)
 	defer bufferParams.Release()
 
-	// Create bind group
-	bindGroupLayout := pipeline.GetBindGroupLayout(0)
-
-	bindGroup := b.device.CreateBindGroupSimple(bindGroupLayout, []wgpu.BindGroupEntry{
-		wgpu.BufferBindingEntry(0, bufferA, 0, uint64(a.ByteSize())),         //nolint:gosec // G115: integer overflow conversion int -> uint64
-		wgpu.BufferBindingEntry(1, bufferOther, 0, uint64(other.ByteSize())), //nolint:gosec // G115: integer overflow conversion int -> uint64
-		wgpu.BufferBindingEntry(2, bufferResult, 0, resultSize),
-		wgpu.BufferBindingEntry(3, bufferParams, 0, 16),
+	sizeA := uint64(a.ByteSize())         //nolint:gosec // G115: integer overflow conversion int -> uint64
+	sizeOther := uint64(other.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
+	bg := b.createBindGroupFromBuffers(entry.layout, []bindGroupBuffer{
+		bufBinding(bufferA, sizeA),
+		bufBinding(bufferOther, sizeOther),
+		bufBinding(bufferResult, resultSize),
+		bufBinding(bufferParams, 16),
 	})
-	defer bindGroup.Release()
+	defer bg.Release()
 
-	// Execute compute pass
-	encoder := b.device.CreateCommandEncoder(nil)
-	computePass := encoder.BeginComputePass(nil)
-	computePass.SetPipeline(pipeline)
-	computePass.SetBindGroup(0, bindGroup, nil)
-
+	encoder, encErr := b.device.CreateCommandEncoder(nil)
+	if encErr != nil {
+		stagingBuf.Release()
+		return nil, fmt.Errorf("runMatMulLazy: create encoder: %w", encErr)
+	}
+	computePass, cpErr := encoder.BeginComputePass(nil)
+	if cpErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: BeginComputePass error: %v", cpErr))
+	}
+	computePass.SetPipeline(entry.pipeline)
+	computePass.SetBindGroup(0, bg, nil)
 	// 2D workgroups (16x16 per workgroup)
 	workgroupsX := (N + 15) / 16
 	workgroupsY := (M + 15) / 16
-	computePass.DispatchWorkgroups(workgroupsX, workgroupsY, 1)
-	computePass.End()
-
-	cmdBuffer := encoder.Finish(nil)
-	b.queueCommand(cmdBuffer) // Batch instead of immediate submit
-
-	// Return LAZY result - NO readBuffer!
-	return b.createLazyResult(bufferResult, resultSize, resultShape, tensor.Float32)
+	computePass.Dispatch(workgroupsX, workgroupsY, 1)
+	if endErr := computePass.End(); endErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: compute pass end error: %v", endErr))
+	}
+	return b.finishAndSubmitLazy(encoder, bufferResult, stagingBuf, resultSize, resultShape, tensor.Float32, "runMatMulLazy")
 }
 
 // runUnaryOpLazy executes a unary operation (exp, sqrt, cos, sin, etc.) with lazy result.
@@ -274,48 +375,59 @@ func (b *Backend) runUnaryOpLazy(x *tensor.RawTensor, shaderName, shaderCode str
 	}
 
 	numElements := x.NumElements()
-	// Compile shader
 	shader := b.compileShader(shaderName, shaderCode)
-	pipeline := b.getOrCreatePipeline(shaderName, shader)
+	entry := b.getOrCreatePipeline(shaderName, shader, bglUnary)
 
 	// Create input buffer (support lazy chaining)
 	bufferX := b.createBufferFromTensor(x)
 	defer bufferX.Release()
 
 	resultSize := uint64(x.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
-	// Create result buffer - NO defer Release!
-	bufferResult := b.device.CreateBuffer(&wgpu.BufferDescriptor{
-		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc | gputypes.BufferUsageCopyDst,
+
+	bufferResult, err := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc,
 		Size:  resultSize,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("runUnaryOpLazy: create result buffer: %w", err)
+	}
+	defer bufferResult.Release()
+
+	stagingBuf, err := b.createStagingBuffer(resultSize)
+	if err != nil {
+		return nil, fmt.Errorf("runUnaryOpLazy: %w", err)
+	}
 
 	// Create params buffer
 	params := b.createParamsBuffer(numElements)
 	defer params.Release()
 
-	// Create bind group
-	bindGroupLayout := pipeline.GetBindGroupLayout(0)
-	bindGroup := b.device.CreateBindGroupSimple(bindGroupLayout, []wgpu.BindGroupEntry{
-		wgpu.BufferBindingEntry(0, bufferX, 0, resultSize),
-		wgpu.BufferBindingEntry(1, bufferResult, 0, resultSize),
-		wgpu.BufferBindingEntry(2, params, 0, 16),
+	bg := b.createBindGroupFromBuffers(entry.layout, []bindGroupBuffer{
+		bufBinding(bufferX, resultSize),
+		bufBinding(bufferResult, resultSize),
+		bufBinding(params, 16),
 	})
-	defer bindGroup.Release()
+	defer bg.Release()
 
-	// Execute compute pass
-	encoder := b.device.CreateCommandEncoder(nil)
-	computePass := encoder.BeginComputePass(nil)
-	computePass.SetPipeline(pipeline)
-	computePass.SetBindGroup(0, bindGroup, nil)
-
+	encoder, encErr := b.device.CreateCommandEncoder(nil)
+	if encErr != nil {
+		stagingBuf.Release()
+		return nil, fmt.Errorf("runUnaryOpLazy: create encoder: %w", encErr)
+	}
+	computePass, cpErr := encoder.BeginComputePass(nil)
+	if cpErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: BeginComputePass error: %v", cpErr))
+	}
+	computePass.SetPipeline(entry.pipeline)
+	computePass.SetBindGroup(0, bg, nil)
 	workgroups := uint32((numElements + workgroupSize - 1) / workgroupSize) //nolint:gosec // G115: integer overflow conversion int -> uint32
-	computePass.DispatchWorkgroups(workgroups, 1, 1)
-	computePass.End()
-
-	cmdBuffer := encoder.Finish(nil)
-	b.queueCommand(cmdBuffer) // Batch instead of immediate submit
-
-	return b.createLazyResult(bufferResult, resultSize, x.Shape(), tensor.Float32)
+	computePass.Dispatch(workgroups, 1, 1)
+	if endErr := computePass.End(); endErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: compute pass end error: %v", endErr))
+	}
+	return b.finishAndSubmitLazy(encoder, bufferResult, stagingBuf, resultSize, x.Shape(), tensor.Float32, "runUnaryOpLazy")
 }
 
 // runScalarOpLazy executes a scalar operation (mul, add, sub, div by scalar) with lazy result.
@@ -325,20 +437,28 @@ func (b *Backend) runScalarOpLazy(x *tensor.RawTensor, scalar float32, shaderNam
 	}
 
 	numElements := x.NumElements()
-	// Compile shader
 	shader := b.compileShader(shaderName, shaderCode)
-	pipeline := b.getOrCreatePipeline(shaderName, shader)
+	entry := b.getOrCreatePipeline(shaderName, shader, bglUnary)
 
 	// Create input buffer
 	bufferX := b.createBufferFromTensor(x)
 	defer bufferX.Release()
 
 	resultSize := uint64(x.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
-	// Create result buffer - NO defer Release!
-	bufferResult := b.device.CreateBuffer(&wgpu.BufferDescriptor{
-		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc | gputypes.BufferUsageCopyDst,
+
+	bufferResult, err := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc,
 		Size:  resultSize,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("runScalarOpLazy: create result buffer: %w", err)
+	}
+	defer bufferResult.Release()
+
+	stagingBuf, err := b.createStagingBuffer(resultSize)
+	if err != nil {
+		return nil, fmt.Errorf("runScalarOpLazy: %w", err)
+	}
 
 	// Create params buffer with scalar value
 	params := make([]byte, 16)
@@ -347,29 +467,32 @@ func (b *Backend) runScalarOpLazy(x *tensor.RawTensor, scalar float32, shaderNam
 	bufferParams := b.createUniformBuffer(params)
 	defer bufferParams.Release()
 
-	// Create bind group
-	bindGroupLayout := pipeline.GetBindGroupLayout(0)
-	bindGroup := b.device.CreateBindGroupSimple(bindGroupLayout, []wgpu.BindGroupEntry{
-		wgpu.BufferBindingEntry(0, bufferX, 0, resultSize),
-		wgpu.BufferBindingEntry(1, bufferResult, 0, resultSize),
-		wgpu.BufferBindingEntry(2, bufferParams, 0, 16),
+	bg := b.createBindGroupFromBuffers(entry.layout, []bindGroupBuffer{
+		bufBinding(bufferX, resultSize),
+		bufBinding(bufferResult, resultSize),
+		bufBinding(bufferParams, 16),
 	})
-	defer bindGroup.Release()
+	defer bg.Release()
 
-	// Execute compute pass
-	encoder := b.device.CreateCommandEncoder(nil)
-	computePass := encoder.BeginComputePass(nil)
-	computePass.SetPipeline(pipeline)
-	computePass.SetBindGroup(0, bindGroup, nil)
-
+	encoder, encErr := b.device.CreateCommandEncoder(nil)
+	if encErr != nil {
+		stagingBuf.Release()
+		return nil, fmt.Errorf("runScalarOpLazy: create encoder: %w", encErr)
+	}
+	computePass, cpErr := encoder.BeginComputePass(nil)
+	if cpErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: BeginComputePass error: %v", cpErr))
+	}
+	computePass.SetPipeline(entry.pipeline)
+	computePass.SetBindGroup(0, bg, nil)
 	workgroups := uint32((numElements + workgroupSize - 1) / workgroupSize) //nolint:gosec // G115: integer overflow conversion int -> uint32
-	computePass.DispatchWorkgroups(workgroups, 1, 1)
-	computePass.End()
-
-	cmdBuffer := encoder.Finish(nil)
-	b.queueCommand(cmdBuffer) // Batch instead of immediate submit
-
-	return b.createLazyResult(bufferResult, resultSize, x.Shape(), tensor.Float32)
+	computePass.Dispatch(workgroups, 1, 1)
+	if endErr := computePass.End(); endErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: compute pass end error: %v", endErr))
+	}
+	return b.finishAndSubmitLazy(encoder, bufferResult, stagingBuf, resultSize, x.Shape(), tensor.Float32, "runScalarOpLazy")
 }
 
 // putFloat32LE writes a float32 to a byte slice in little-endian order.
@@ -412,9 +535,8 @@ func (b *Backend) runBatchMatMulLazy(a, other *tensor.RawTensor) (*tensor.RawTen
 		resultShape = tensor.Shape{shapeA[0], shapeA[1], int(M), int(N)}
 	}
 
-	// Compile shader
 	shader := b.compileShader("batchMatMul", batchMatMulShader)
-	pipeline := b.getOrCreatePipeline("batchMatMul", shader)
+	entry := b.getOrCreatePipeline("batchMatMul", shader, bglBinary)
 
 	// Create GPU buffers (support lazy chaining)
 	bufferA := b.createBufferFromTensor(a)
@@ -425,11 +547,21 @@ func (b *Backend) runBatchMatMulLazy(a, other *tensor.RawTensor) (*tensor.RawTen
 
 	resultSize := uint64(batch) * uint64(M) * uint64(N) * 4 // float32 = 4 bytes
 
-	// Create result buffer - NO defer Release! Ownership transfers to lazy tensor
-	bufferResult := b.device.CreateBuffer(&wgpu.BufferDescriptor{
-		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc | gputypes.BufferUsageCopyDst,
+	// Intermediate Storage buffer: written by compute shader, source for CopyBufferToBuffer.
+	bufferResult, err := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc,
 		Size:  resultSize,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("runBatchMatMulLazy: create result buffer: %w", err)
+	}
+	defer bufferResult.Release()
+
+	// Staging buffer (MapRead | CopyDst): ownership transfers to lazy tensor.
+	stagingBuf, err := b.createStagingBuffer(resultSize)
+	if err != nil {
+		return nil, fmt.Errorf("runBatchMatMulLazy: %w", err)
+	}
 
 	// Create uniform buffer for params
 	params := make([]byte, 16)
@@ -440,35 +572,37 @@ func (b *Backend) runBatchMatMulLazy(a, other *tensor.RawTensor) (*tensor.RawTen
 	bufferParams := b.createUniformBuffer(params)
 	defer bufferParams.Release()
 
-	// Create bind group
-	bindGroupLayout := pipeline.GetBindGroupLayout(0)
-
-	bindGroup := b.device.CreateBindGroupSimple(bindGroupLayout, []wgpu.BindGroupEntry{
-		wgpu.BufferBindingEntry(0, bufferA, 0, uint64(a.ByteSize())),     //nolint:gosec // G115: integer overflow conversion int -> uint64
-		wgpu.BufferBindingEntry(1, bufferB, 0, uint64(other.ByteSize())), //nolint:gosec // G115: integer overflow conversion int -> uint64
-		wgpu.BufferBindingEntry(2, bufferResult, 0, resultSize),
-		wgpu.BufferBindingEntry(3, bufferParams, 0, 16),
+	sizeA := uint64(a.ByteSize())     //nolint:gosec // G115: integer overflow conversion int -> uint64
+	sizeB := uint64(other.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
+	bg := b.createBindGroupFromBuffers(entry.layout, []bindGroupBuffer{
+		bufBinding(bufferA, sizeA),
+		bufBinding(bufferB, sizeB),
+		bufBinding(bufferResult, resultSize),
+		bufBinding(bufferParams, 16),
 	})
-	defer bindGroup.Release()
+	defer bg.Release()
 
-	// Execute compute pass
-	encoder := b.device.CreateCommandEncoder(nil)
-	computePass := encoder.BeginComputePass(nil)
-
-	computePass.SetPipeline(pipeline)
-	computePass.SetBindGroup(0, bindGroup, nil)
-
+	encoder, encErr := b.device.CreateCommandEncoder(nil)
+	if encErr != nil {
+		stagingBuf.Release()
+		return nil, fmt.Errorf("runBatchMatMulLazy: create encoder: %w", encErr)
+	}
+	computePass, cpErr := encoder.BeginComputePass(nil)
+	if cpErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: BeginComputePass error: %v", cpErr))
+	}
+	computePass.SetPipeline(entry.pipeline)
+	computePass.SetBindGroup(0, bg, nil)
 	// Dispatch: (N+7)/8 x (M+7)/8 x batch
 	workgroupsX := (N + 7) / 8
 	workgroupsY := (M + 7) / 8
-	computePass.DispatchWorkgroups(workgroupsX, workgroupsY, batch)
-	computePass.End()
-
-	cmdBuffer := encoder.Finish(nil)
-	b.queueCommand(cmdBuffer) // Batch instead of immediate submit
-
-	// Return LAZY result - NO readBuffer!
-	return b.createLazyResult(bufferResult, resultSize, resultShape, tensor.Float32)
+	computePass.Dispatch(workgroupsX, workgroupsY, batch)
+	if endErr := computePass.End(); endErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: compute pass end error: %v", endErr))
+	}
+	return b.finishAndSubmitLazy(encoder, bufferResult, stagingBuf, resultSize, resultShape, tensor.Float32, "runBatchMatMulLazy")
 }
 
 // runTransposeLazy executes 2D matrix transpose with lazy result.
@@ -483,9 +617,8 @@ func (b *Backend) runTransposeLazy(input *tensor.RawTensor) (*tensor.RawTensor, 
 	rows := uint32(input.Shape()[0]) //nolint:gosec // G115: safe, tensor dims are small positive ints
 	cols := uint32(input.Shape()[1]) //nolint:gosec // G115: safe, tensor dims are small positive ints
 
-	// Compile shader
 	shader := b.compileShader("transpose", transposeShader)
-	pipeline := b.getOrCreatePipeline("transpose", shader)
+	entry := b.getOrCreatePipeline("transpose", shader, bglUnary)
 
 	// Create input buffer
 	bufferInput := b.createBufferFromTensor(input)
@@ -493,11 +626,22 @@ func (b *Backend) runTransposeLazy(input *tensor.RawTensor) (*tensor.RawTensor, 
 
 	resultShape := tensor.Shape{int(cols), int(rows)}
 	resultSize := uint64(input.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
-	// Create result buffer - NO defer Release!
-	bufferResult := b.device.CreateBuffer(&wgpu.BufferDescriptor{
-		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc | gputypes.BufferUsageCopyDst,
+
+	// Intermediate Storage buffer: written by compute shader, source for CopyBufferToBuffer.
+	bufferResult, err := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc,
 		Size:  resultSize,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("runTransposeLazy: create result buffer: %w", err)
+	}
+	defer bufferResult.Release()
+
+	// Staging buffer (MapRead | CopyDst): ownership transfers to lazy tensor.
+	stagingBuf, err := b.createStagingBuffer(resultSize)
+	if err != nil {
+		return nil, fmt.Errorf("runTransposeLazy: %w", err)
+	}
 
 	// Create params buffer
 	params := make([]byte, 16)
@@ -506,30 +650,33 @@ func (b *Backend) runTransposeLazy(input *tensor.RawTensor) (*tensor.RawTensor, 
 	bufferParams := b.createUniformBuffer(params)
 	defer bufferParams.Release()
 
-	// Create bind group
-	bindGroupLayout := pipeline.GetBindGroupLayout(0)
-	bindGroup := b.device.CreateBindGroupSimple(bindGroupLayout, []wgpu.BindGroupEntry{
-		wgpu.BufferBindingEntry(0, bufferInput, 0, resultSize),
-		wgpu.BufferBindingEntry(1, bufferResult, 0, resultSize),
-		wgpu.BufferBindingEntry(2, bufferParams, 0, 16),
+	bg := b.createBindGroupFromBuffers(entry.layout, []bindGroupBuffer{
+		bufBinding(bufferInput, resultSize),
+		bufBinding(bufferResult, resultSize),
+		bufBinding(bufferParams, 16),
 	})
-	defer bindGroup.Release()
+	defer bg.Release()
 
-	// Execute compute pass
-	encoder := b.device.CreateCommandEncoder(nil)
-	computePass := encoder.BeginComputePass(nil)
-	computePass.SetPipeline(pipeline)
-	computePass.SetBindGroup(0, bindGroup, nil)
-
+	encoder, encErr := b.device.CreateCommandEncoder(nil)
+	if encErr != nil {
+		stagingBuf.Release()
+		return nil, fmt.Errorf("runTransposeLazy: create encoder: %w", encErr)
+	}
+	computePass, cpErr := encoder.BeginComputePass(nil)
+	if cpErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: BeginComputePass error: %v", cpErr))
+	}
+	computePass.SetPipeline(entry.pipeline)
+	computePass.SetBindGroup(0, bg, nil)
 	workgroupsX := (cols + 15) / 16
 	workgroupsY := (rows + 15) / 16
-	computePass.DispatchWorkgroups(workgroupsX, workgroupsY, 1)
-	computePass.End()
-
-	cmdBuffer := encoder.Finish(nil)
-	b.queueCommand(cmdBuffer) // Batch instead of immediate submit
-
-	return b.createLazyResult(bufferResult, resultSize, resultShape, tensor.Float32)
+	computePass.Dispatch(workgroupsX, workgroupsY, 1)
+	if endErr := computePass.End(); endErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: compute pass end error: %v", endErr))
+	}
+	return b.finishAndSubmitLazy(encoder, bufferResult, stagingBuf, resultSize, resultShape, tensor.Float32, "runTransposeLazy")
 }
 
 // runSoftmaxLazy executes softmax on GPU with lazy result.
@@ -546,20 +693,30 @@ func (b *Backend) runSoftmaxLazy(input *tensor.RawTensor) (*tensor.RawTensor, er
 	batchSize := uint32(input.Shape()[0])  //nolint:gosec // G115: safe, tensor dims are small positive ints
 	numClasses := uint32(input.Shape()[1]) //nolint:gosec // G115: safe, tensor dims are small positive ints
 
-	// Compile shader
 	shader := b.compileShader("softmax", softmaxShader)
-	pipeline := b.getOrCreatePipeline("softmax", shader)
+	entry := b.getOrCreatePipeline("softmax", shader, bglUnary)
 
 	// Create input buffer (support lazy chaining)
 	bufferInput := b.createBufferFromTensor(input)
 	defer bufferInput.Release()
 
 	resultSize := uint64(input.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
-	// Create result buffer - NO defer Release!
-	bufferResult := b.device.CreateBuffer(&wgpu.BufferDescriptor{
-		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc | gputypes.BufferUsageCopyDst,
+
+	// Intermediate Storage buffer: written by compute shader, source for CopyBufferToBuffer.
+	bufferResult, err := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc,
 		Size:  resultSize,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("runSoftmaxLazy: create result buffer: %w", err)
+	}
+	defer bufferResult.Release()
+
+	// Staging buffer (MapRead | CopyDst): ownership transfers to lazy tensor.
+	stagingBuf, err := b.createStagingBuffer(resultSize)
+	if err != nil {
+		return nil, fmt.Errorf("runSoftmaxLazy: %w", err)
+	}
 
 	// Create uniform buffer for params
 	params := make([]byte, 16)
@@ -568,30 +725,33 @@ func (b *Backend) runSoftmaxLazy(input *tensor.RawTensor) (*tensor.RawTensor, er
 	bufferParams := b.createUniformBuffer(params)
 	defer bufferParams.Release()
 
-	// Create bind group
-	bindGroupLayout := pipeline.GetBindGroupLayout(0)
-	bindGroup := b.device.CreateBindGroupSimple(bindGroupLayout, []wgpu.BindGroupEntry{
-		wgpu.BufferBindingEntry(0, bufferInput, 0, resultSize),
-		wgpu.BufferBindingEntry(1, bufferResult, 0, resultSize),
-		wgpu.BufferBindingEntry(2, bufferParams, 0, 16),
+	bg := b.createBindGroupFromBuffers(entry.layout, []bindGroupBuffer{
+		bufBinding(bufferInput, resultSize),
+		bufBinding(bufferResult, resultSize),
+		bufBinding(bufferParams, 16),
 	})
-	defer bindGroup.Release()
+	defer bg.Release()
 
-	// Execute compute pass
-	encoder := b.device.CreateCommandEncoder(nil)
-	computePass := encoder.BeginComputePass(nil)
-	computePass.SetPipeline(pipeline)
-	computePass.SetBindGroup(0, bindGroup, nil)
-
+	encoder, encErr := b.device.CreateCommandEncoder(nil)
+	if encErr != nil {
+		stagingBuf.Release()
+		return nil, fmt.Errorf("runSoftmaxLazy: create encoder: %w", encErr)
+	}
+	computePass, cpErr := encoder.BeginComputePass(nil)
+	if cpErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: BeginComputePass error: %v", cpErr))
+	}
+	computePass.SetPipeline(entry.pipeline)
+	computePass.SetBindGroup(0, bg, nil)
 	// Each workgroup handles one row (batch sample)
 	workgroups := (batchSize + workgroupSize - 1) / workgroupSize
-	computePass.DispatchWorkgroups(workgroups, 1, 1)
-	computePass.End()
-
-	cmdBuffer := encoder.Finish(nil)
-	b.queueCommand(cmdBuffer) // Batch instead of immediate submit
-
-	return b.createLazyResult(bufferResult, resultSize, input.Shape(), tensor.Float32)
+	computePass.Dispatch(workgroups, 1, 1)
+	if endErr := computePass.End(); endErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: compute pass end error: %v", endErr))
+	}
+	return b.finishAndSubmitLazy(encoder, bufferResult, stagingBuf, resultSize, input.Shape(), tensor.Float32, "runSoftmaxLazy")
 }
 
 // runTransposeNDLazy executes N-dimensional transpose on GPU with lazy result.
@@ -651,7 +811,7 @@ func (b *Backend) runTransposeNDLazy(input *tensor.RawTensor, axes []int) (*tens
 
 	// Compile shader and get pipeline
 	shader := b.compileShader(shaderName, shaderCode)
-	pipeline := b.getOrCreatePipeline(shaderName, shader)
+	entry := b.getOrCreatePipeline(shaderName, shader, bglUnary)
 
 	// Create input buffer (support lazy chaining)
 	bufferInput := b.createBufferFromTensor(input)
@@ -659,11 +819,21 @@ func (b *Backend) runTransposeNDLazy(input *tensor.RawTensor, axes []int) (*tens
 
 	resultSize := uint64(input.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
 
-	// Create result buffer - NO defer Release!
-	bufferResult := b.device.CreateBuffer(&wgpu.BufferDescriptor{
-		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc | gputypes.BufferUsageCopyDst,
+	// Intermediate Storage buffer: written by compute shader, source for CopyBufferToBuffer.
+	bufferResult, bufErr := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc,
 		Size:  resultSize,
 	})
+	if bufErr != nil {
+		return nil, fmt.Errorf("runTransposeNDLazy: create result buffer: %w", bufErr)
+	}
+	defer bufferResult.Release()
+
+	// Staging buffer (MapRead | CopyDst): ownership transfers to lazy tensor.
+	stagingBuf, stagingErr := b.createStagingBuffer(resultSize)
+	if stagingErr != nil {
+		return nil, fmt.Errorf("runTransposeNDLazy: %w", stagingErr)
+	}
 
 	// Create uniform buffer for params
 	// Layout: ndim, total_elements, shapes[6], input_strides[6], output_strides[6], axes[6]
@@ -713,32 +883,35 @@ func (b *Backend) runTransposeNDLazy(input *tensor.RawTensor, axes []int) (*tens
 	bufferParams := b.createUniformBuffer(params)
 	defer bufferParams.Release()
 
-	// Create bind group
-	bindGroupLayout := pipeline.GetBindGroupLayout(0)
 	paramsSize := uint64(len(params))
-	bindGroup := b.device.CreateBindGroupSimple(bindGroupLayout, []wgpu.BindGroupEntry{
-		wgpu.BufferBindingEntry(0, bufferInput, 0, resultSize),
-		wgpu.BufferBindingEntry(1, bufferResult, 0, resultSize),
-		wgpu.BufferBindingEntry(2, bufferParams, 0, paramsSize),
+	bg := b.createBindGroupFromBuffers(entry.layout, []bindGroupBuffer{
+		bufBinding(bufferInput, resultSize),
+		bufBinding(bufferResult, resultSize),
+		bufBinding(bufferParams, paramsSize),
 	})
-	defer bindGroup.Release()
+	defer bg.Release()
 
-	// Execute compute pass
-	encoder := b.device.CreateCommandEncoder(nil)
-	computePass := encoder.BeginComputePass(nil)
-	computePass.SetPipeline(pipeline)
-	computePass.SetBindGroup(0, bindGroup, nil)
-
+	encoder, encErr := b.device.CreateCommandEncoder(nil)
+	if encErr != nil {
+		stagingBuf.Release()
+		return nil, fmt.Errorf("runTransposeNDLazy: create encoder: %w", encErr)
+	}
+	computePass, cpErr := encoder.BeginComputePass(nil)
+	if cpErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: BeginComputePass error: %v", cpErr))
+	}
+	computePass.SetPipeline(entry.pipeline)
+	computePass.SetBindGroup(0, bg, nil)
 	// Calculate workgroup count (1D workgroups, 256 threads each)
 	numElements := uint32(shape.NumElements()) //nolint:gosec // G115: integer overflow conversion int -> uint32
 	workgroups := (numElements + 255) / 256
-	computePass.DispatchWorkgroups(workgroups, 1, 1)
-	computePass.End()
-
-	cmdBuffer := encoder.Finish(nil)
-	b.queueCommand(cmdBuffer) // Batch instead of immediate submit
-
-	return b.createLazyResult(bufferResult, resultSize, newShape, input.DType())
+	computePass.Dispatch(workgroups, 1, 1)
+	if endErr := computePass.End(); endErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: compute pass end error: %v", endErr))
+	}
+	return b.finishAndSubmitLazy(encoder, bufferResult, stagingBuf, resultSize, newShape, input.DType(), "runTransposeNDLazy")
 }
 
 // runExpandLazy broadcasts tensor to new shape with lazy result.
@@ -789,7 +962,7 @@ func (b *Backend) runExpandLazy(input *tensor.RawTensor, newShape tensor.Shape) 
 
 	// Compile shader and get pipeline
 	shader := b.compileShader(shaderName, shaderCode)
-	pipeline := b.getOrCreatePipeline(shaderName, shader)
+	entry := b.getOrCreatePipeline(shaderName, shader, bglUnary)
 
 	// Create input buffer (support lazy chaining)
 	bufferInput := b.createBufferFromTensor(input)
@@ -800,11 +973,21 @@ func (b *Backend) runExpandLazy(input *tensor.RawTensor, newShape tensor.Shape) 
 	elementSize := uint64(input.DType().Size())           //nolint:gosec // G115: integer overflow conversion int -> uint64
 	resultSize := uint64(resultNumElements) * elementSize //nolint:gosec // G115: integer overflow conversion int -> uint64
 
-	// Create result buffer - NO defer Release!
-	bufferResult := b.device.CreateBuffer(&wgpu.BufferDescriptor{
-		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc | gputypes.BufferUsageCopyDst,
+	// Intermediate Storage buffer: written by compute shader, source for CopyBufferToBuffer.
+	bufferResult, bufErr := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc,
 		Size:  resultSize,
 	})
+	if bufErr != nil {
+		return nil, fmt.Errorf("runExpandLazy: create result buffer: %w", bufErr)
+	}
+	defer bufferResult.Release()
+
+	// Staging buffer (MapRead | CopyDst): ownership transfers to lazy tensor.
+	stagingBuf, stagingErr := b.createStagingBuffer(resultSize)
+	if stagingErr != nil {
+		return nil, fmt.Errorf("runExpandLazy: %w", stagingErr)
+	}
 
 	// Create uniform buffer for params
 	params := make([]byte, 4*20) // 20 u32 values * 4 bytes
@@ -844,32 +1027,34 @@ func (b *Backend) runExpandLazy(input *tensor.RawTensor, newShape tensor.Shape) 
 	bufferParams := b.createUniformBuffer(params)
 	defer bufferParams.Release()
 
-	// Create bind group
-	bindGroupLayout := pipeline.GetBindGroupLayout(0)
-
 	inputSize := uint64(input.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
 	paramsSize := uint64(len(params))
-	bindGroup := b.device.CreateBindGroupSimple(bindGroupLayout, []wgpu.BindGroupEntry{
-		wgpu.BufferBindingEntry(0, bufferInput, 0, inputSize),
-		wgpu.BufferBindingEntry(1, bufferResult, 0, resultSize),
-		wgpu.BufferBindingEntry(2, bufferParams, 0, paramsSize),
+	bg := b.createBindGroupFromBuffers(entry.layout, []bindGroupBuffer{
+		bufBinding(bufferInput, inputSize),
+		bufBinding(bufferResult, resultSize),
+		bufBinding(bufferParams, paramsSize),
 	})
-	defer bindGroup.Release()
+	defer bg.Release()
 
-	// Execute compute pass
-	encoder := b.device.CreateCommandEncoder(nil)
-	computePass := encoder.BeginComputePass(nil)
-	computePass.SetPipeline(pipeline)
-	computePass.SetBindGroup(0, bindGroup, nil)
-
+	encoder, encErr := b.device.CreateCommandEncoder(nil)
+	if encErr != nil {
+		stagingBuf.Release()
+		return nil, fmt.Errorf("runExpandLazy: create encoder: %w", encErr)
+	}
+	computePass, cpErr := encoder.BeginComputePass(nil)
+	if cpErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: BeginComputePass error: %v", cpErr))
+	}
+	computePass.SetPipeline(entry.pipeline)
+	computePass.SetBindGroup(0, bg, nil)
 	workgroups := uint32((resultNumElements + 255) / 256) //nolint:gosec // G115: integer overflow conversion int -> uint32
-	computePass.DispatchWorkgroups(workgroups, 1, 1)
-	computePass.End()
-
-	cmdBuffer := encoder.Finish(nil)
-	b.queueCommand(cmdBuffer) // Batch instead of immediate submit
-
-	return b.createLazyResult(bufferResult, resultSize, newShape, input.DType())
+	computePass.Dispatch(workgroups, 1, 1)
+	if endErr := computePass.End(); endErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: compute pass end error: %v", endErr))
+	}
+	return b.finishAndSubmitLazy(encoder, bufferResult, stagingBuf, resultSize, newShape, input.DType(), "runExpandLazy")
 }
 
 // runGatherLazy executes Gather operation with lazy result.
@@ -911,7 +1096,7 @@ func (b *Backend) runGatherLazy(input *tensor.RawTensor, dim int, indices *tenso
 	gatherResultShape[ndim-1] = outputK
 
 	shader := b.compileShader("gather", gatherShader)
-	pipeline := b.getOrCreatePipeline("gather", shader)
+	entry := b.getOrCreatePipeline("gather", shader, bglBinary)
 
 	// Create buffers (support lazy chaining)
 	bufferInput := b.createBufferFromTensor(input)
@@ -921,11 +1106,22 @@ func (b *Backend) runGatherLazy(input *tensor.RawTensor, dim int, indices *tenso
 	defer bufferIndices.Release()
 
 	gatherResultSize := uint64(gatherBatchSize) * uint64(outputK) * 4 //nolint:gosec // G115: integer overflow conversion int -> uint64
-	// Create result buffer - NO defer Release!
-	bufferResult := b.device.CreateBuffer(&wgpu.BufferDescriptor{
-		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc | gputypes.BufferUsageCopyDst,
+
+	// Intermediate Storage buffer: written by compute shader, source for CopyBufferToBuffer.
+	bufferResult, bufErr := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc,
 		Size:  gatherResultSize,
 	})
+	if bufErr != nil {
+		return nil, fmt.Errorf("runGatherLazy: create result buffer: %w", bufErr)
+	}
+	defer bufferResult.Release()
+
+	// Staging buffer (MapRead | CopyDst): ownership transfers to lazy tensor.
+	stagingBuf, stagingErr := b.createStagingBuffer(gatherResultSize)
+	if stagingErr != nil {
+		return nil, fmt.Errorf("runGatherLazy: %w", stagingErr)
+	}
 
 	// Create uniform buffer
 	params := make([]byte, 16)
@@ -935,39 +1131,43 @@ func (b *Backend) runGatherLazy(input *tensor.RawTensor, dim int, indices *tenso
 	bufferParams := b.createUniformBuffer(params)
 	defer bufferParams.Release()
 
-	// Create bind group
-	bindGroupLayout := pipeline.GetBindGroupLayout(0)
-
-	bindGroup := b.device.CreateBindGroupSimple(bindGroupLayout, []wgpu.BindGroupEntry{
-		wgpu.BufferBindingEntry(0, bufferInput, 0, uint64(input.ByteSize())),     //nolint:gosec // G115: integer overflow conversion int -> uint64
-		wgpu.BufferBindingEntry(1, bufferIndices, 0, uint64(indices.ByteSize())), //nolint:gosec // G115: integer overflow conversion int -> uint64
-		wgpu.BufferBindingEntry(2, bufferResult, 0, gatherResultSize),
-		wgpu.BufferBindingEntry(3, bufferParams, 0, 16),
+	sizeInput := uint64(input.ByteSize())     //nolint:gosec // G115: integer overflow conversion int -> uint64
+	sizeIndices := uint64(indices.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
+	bg := b.createBindGroupFromBuffers(entry.layout, []bindGroupBuffer{
+		bufBinding(bufferInput, sizeInput),
+		bufBinding(bufferIndices, sizeIndices),
+		bufBinding(bufferResult, gatherResultSize),
+		bufBinding(bufferParams, 16),
 	})
-	defer bindGroup.Release()
+	defer bg.Release()
 
-	// Execute
-	encoder := b.device.CreateCommandEncoder(nil)
-	computePass := encoder.BeginComputePass(nil)
-	computePass.SetPipeline(pipeline)
-	computePass.SetBindGroup(0, bindGroup, nil)
-
+	encoder, encErr := b.device.CreateCommandEncoder(nil)
+	if encErr != nil {
+		stagingBuf.Release()
+		return nil, fmt.Errorf("runGatherLazy: create encoder: %w", encErr)
+	}
+	computePass, cpErr := encoder.BeginComputePass(nil)
+	if cpErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: BeginComputePass error: %v", cpErr))
+	}
+	computePass.SetPipeline(entry.pipeline)
+	computePass.SetBindGroup(0, bg, nil)
 	totalOutput := gatherBatchSize * outputK
 	workgroups := uint32((totalOutput + workgroupSize - 1) / workgroupSize) //nolint:gosec // G115: integer overflow conversion int -> uint32
-	computePass.DispatchWorkgroups(workgroups, 1, 1)
-	computePass.End()
-
-	cmdBuffer := encoder.Finish(nil)
-	b.queueCommand(cmdBuffer) // Batch instead of immediate submit
-
-	return b.createLazyResult(bufferResult, gatherResultSize, gatherResultShape, tensor.Float32)
+	computePass.Dispatch(workgroups, 1, 1)
+	if endErr := computePass.End(); endErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: compute pass end error: %v", endErr))
+	}
+	return b.finishAndSubmitLazy(encoder, bufferResult, stagingBuf, gatherResultSize, gatherResultShape, tensor.Float32, "runGatherLazy")
 }
 
 // runWhereLazy executes conditional selection on GPU and returns a LAZY tensor.
 // result[i] = condition[i] != 0 ? x[i] : y[i].
 // The result stays on GPU until Data() is called.
 //
-//nolint:gocyclo,cyclop,funlen // Conditional selection with broadcasting has inherent complexity
+//nolint:gocyclo,cyclop,funlen,gocognit // Conditional selection with broadcasting has inherent complexity
 func (b *Backend) runWhereLazy(condition, x, y *tensor.RawTensor) (*tensor.RawTensor, error) {
 	// Convert condition to float32 for GPU
 	var condFloat32 *tensor.RawTensor
@@ -1045,7 +1245,7 @@ func (b *Backend) runWhereLazy(condition, x, y *tensor.RawTensor) (*tensor.RawTe
 	}
 
 	shader := b.compileShader(shaderName, shaderCode)
-	pipeline := b.getOrCreatePipeline(shaderName, shader)
+	entry := b.getOrCreatePipeline(shaderName, shader, bglWhere)
 
 	// Create buffers (from lazy tensors if needed)
 	bufferCondition := b.createBufferFromTensor(condFloat32)
@@ -1058,53 +1258,63 @@ func (b *Backend) runWhereLazy(condition, x, y *tensor.RawTensor) (*tensor.RawTe
 	defer bufferY.Release()
 
 	resultSize := uint64(x.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
-	// Create result buffer - NO defer Release! Ownership transfers to lazy tensor
-	bufferResult := b.device.CreateBuffer(&wgpu.BufferDescriptor{
-		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc | gputypes.BufferUsageCopyDst,
+
+	// Intermediate Storage buffer: written by compute shader, source for CopyBufferToBuffer.
+	bufferResult, bufErr := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc,
 		Size:  resultSize,
 	})
+	if bufErr != nil {
+		return nil, fmt.Errorf("runWhereLazy: create result buffer: %w", bufErr)
+	}
+	defer bufferResult.Release()
+
+	// Staging buffer (MapRead | CopyDst): ownership transfers to lazy tensor.
+	stagingBuf, stagingErr := b.createStagingBuffer(resultSize)
+	if stagingErr != nil {
+		return nil, fmt.Errorf("runWhereLazy: %w", stagingErr)
+	}
 
 	// Create uniform buffer
 	params := make([]byte, 16)
-
 	binary.LittleEndian.PutUint32(params[0:4], uint32(numElements)) //nolint:gosec // G115: integer overflow conversion int -> uint32
 	bufferParams := b.createUniformBuffer(params)
 	defer bufferParams.Release()
 
-	// Create bind group
 	condSize := uint64(condFloat32.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
-	bindGroupLayout := pipeline.GetBindGroupLayout(0)
-	bindGroup := b.device.CreateBindGroupSimple(bindGroupLayout, []wgpu.BindGroupEntry{
-		wgpu.BufferBindingEntry(0, bufferCondition, 0, condSize),
-		wgpu.BufferBindingEntry(1, bufferX, 0, resultSize),
-		wgpu.BufferBindingEntry(2, bufferY, 0, resultSize),
-		wgpu.BufferBindingEntry(3, bufferResult, 0, resultSize),
-		wgpu.BufferBindingEntry(4, bufferParams, 0, 16),
+	bg := b.createBindGroupFromBuffers(entry.layout, []bindGroupBuffer{
+		bufBinding(bufferCondition, condSize),
+		bufBinding(bufferX, resultSize),
+		bufBinding(bufferY, resultSize),
+		bufBinding(bufferResult, resultSize),
+		bufBinding(bufferParams, 16),
 	})
-	defer bindGroup.Release()
+	defer bg.Release()
 
-	// Execute
-	encoder := b.device.CreateCommandEncoder(nil)
-	computePass := encoder.BeginComputePass(nil)
-
-	computePass.SetPipeline(pipeline)
-	computePass.SetBindGroup(0, bindGroup, nil)
-
+	encoder, encErr := b.device.CreateCommandEncoder(nil)
+	if encErr != nil {
+		stagingBuf.Release()
+		return nil, fmt.Errorf("runWhereLazy: create encoder: %w", encErr)
+	}
+	computePass, cpErr := encoder.BeginComputePass(nil)
+	if cpErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: BeginComputePass error: %v", cpErr))
+	}
+	computePass.SetPipeline(entry.pipeline)
+	computePass.SetBindGroup(0, bg, nil)
 	workgroups := uint32((numElements + workgroupSize - 1) / workgroupSize) //nolint:gosec // G115: integer overflow conversion int -> uint32
-	computePass.DispatchWorkgroups(workgroups, 1, 1)
-	computePass.End()
-
-	cmdBuffer := encoder.Finish(nil)
-	b.queueCommand(cmdBuffer) // Batch instead of immediate submit
-
-	return b.createLazyResult(bufferResult, resultSize, outShape, dtype)
+	computePass.Dispatch(workgroups, 1, 1)
+	if endErr := computePass.End(); endErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: compute pass end error: %v", endErr))
+	}
+	return b.finishAndSubmitLazy(encoder, bufferResult, stagingBuf, resultSize, outShape, dtype, "runWhereLazy")
 }
 
 // runSumLazy executes sum reduction and returns a LAZY tensor.
 // For Sum, the result is scalar (4 bytes), so lazy mode has minimal benefit.
 // However, this avoids blocking the GPU pipeline during chained operations.
-//
-//nolint:funlen // Parallel reduction requires multiple stages
 func (b *Backend) runSumLazy(input *tensor.RawTensor) (*tensor.RawTensor, error) {
 	dtype := input.DType()
 	if dtype != tensor.Float32 && dtype != tensor.Int32 {
@@ -1133,7 +1343,7 @@ func (b *Backend) runSumLazy(input *tensor.RawTensor) (*tensor.RawTensor, error)
 	}
 
 	shader := b.compileShader(shaderName, shaderCode)
-	pipeline := b.getOrCreatePipeline(shaderName, shader)
+	entry := b.getOrCreatePipeline(shaderName, shader, bglUnary)
 
 	// Create input buffer (from lazy tensor if needed)
 	bufferInput := b.createBufferFromTensor(input)
@@ -1143,48 +1353,32 @@ func (b *Backend) runSumLazy(input *tensor.RawTensor) (*tensor.RawTensor, error)
 	numWorkgroups := uint32((numElements + workgroupSize - 1) / workgroupSize) //nolint:gosec // G115: integer overflow conversion int -> uint32
 	partialSumsSize := uint64(numWorkgroups) * 4
 
-	bufferPartialSums := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+	bufferPartialSums, bufErr := b.device.CreateBuffer(&wgpu.BufferDescriptor{
 		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc | gputypes.BufferUsageCopyDst,
 		Size:  partialSumsSize,
 	})
+	if bufErr != nil {
+		return nil, fmt.Errorf("runSumLazy: create partial sums buffer: %w", bufErr)
+	}
 	defer bufferPartialSums.Release()
 
 	// Create uniform buffer for params
 	params := make([]byte, 16)
-
 	binary.LittleEndian.PutUint32(params[0:4], uint32(numElements)) //nolint:gosec // G115: integer overflow conversion int -> uint32
 	bufferParams := b.createUniformBuffer(params)
 	defer bufferParams.Release()
 
-	// Create bind group
-	bindGroupLayout := pipeline.GetBindGroupLayout(0)
-
-	bindGroup := b.device.CreateBindGroupSimple(bindGroupLayout, []wgpu.BindGroupEntry{
-		wgpu.BufferBindingEntry(0, bufferInput, 0, uint64(input.ByteSize())), //nolint:gosec // G115: integer overflow conversion int -> uint64
-		wgpu.BufferBindingEntry(1, bufferPartialSums, 0, partialSumsSize),
-		wgpu.BufferBindingEntry(2, bufferParams, 0, 16),
+	inputSize := uint64(input.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
+	bg := b.createBindGroupFromBuffers(entry.layout, []bindGroupBuffer{
+		bufBinding(bufferInput, inputSize),
+		bufBinding(bufferPartialSums, partialSumsSize),
+		bufBinding(bufferParams, 16),
 	})
-	defer bindGroup.Release()
+	defer bg.Release()
 
-	// Execute compute pass
-	encoder := b.device.CreateCommandEncoder(nil)
-	computePass := encoder.BeginComputePass(nil)
-
-	computePass.SetPipeline(pipeline)
-	computePass.SetBindGroup(0, bindGroup, nil)
-	computePass.DispatchWorkgroups(numWorkgroups, 1, 1)
-	computePass.End()
-
-	cmdBuffer := encoder.Finish(nil)
-	b.queueCommand(cmdBuffer) // Batch instead of immediate submit
-
-	// For Sum, we need to read partial sums and aggregate on CPU.
-	// This is unavoidable for parallel reduction.
-	// Read partial sums.
-	partialData, err := b.readBuffer(bufferPartialSums, partialSumsSize)
-	if err != nil {
-		return nil, err
-	}
+	// Sum needs immediate readback to aggregate partial results on CPU.
+	// Use unified encoder: compute + copy to staging in one submission.
+	partialData := b.execComputeAndRead(entry.pipeline, bg, numWorkgroups, 1, 1, bufferPartialSums, partialSumsSize)
 
 	// Sum partial results on CPU based on dtype
 	switch dtype {

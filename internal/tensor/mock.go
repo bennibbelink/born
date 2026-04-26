@@ -1017,6 +1017,34 @@ func (m *MockBackend) Where(condition, x, y *RawTensor) *RawTensor {
 	return result
 }
 
+// Clamp restricts tensor values element-wise to [minBound, maxBound].
+func (m *MockBackend) Clamp(x *RawTensor, minBound, maxBound any) *RawTensor {
+	result, err := NewRaw(x.Shape(), x.DType(), m.Device())
+	if err != nil {
+		panic(err)
+	}
+	resultData := m.toFloat64Slice(result)
+
+	minFloat := m.anyToFloat64(minBound)
+	maxFloat := m.anyToFloat64(maxBound)
+
+	if minFloat > maxFloat {
+		for i := range resultData {
+			resultData[i] = maxFloat
+		}
+		m.fromFloat64Slice(resultData, result)
+		return result
+	}
+
+	xData := m.toFloat64Slice(x)
+	for i, v := range xData {
+		resultData[i] = min(max(v, minFloat), maxFloat)
+	}
+
+	m.fromFloat64Slice(resultData, result)
+	return result
+}
+
 // Embedding performs embedding lookup (naive implementation).
 // weight: [numEmbeddings, embeddingDim]
 // indices: any shape of int32 indices

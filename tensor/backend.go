@@ -59,15 +59,16 @@ type Backend interface {
 	DivScalar(x *RawTensor, scalar any) *RawTensor // Divide by scalar.
 
 	// Math operations (element-wise).
-	Exp(x *RawTensor) *RawTensor   // Exponential.
-	Log(x *RawTensor) *RawTensor   // Natural logarithm.
-	Sqrt(x *RawTensor) *RawTensor  // Square root.
-	Rsqrt(x *RawTensor) *RawTensor // Reciprocal square root (1/sqrt(x)).
-	Cos(x *RawTensor) *RawTensor   // Cosine.
-	Sin(x *RawTensor) *RawTensor   // Sine.
-	Erf(x *RawTensor) *RawTensor   // Error function (erf).
-	Sign(x *RawTensor) *RawTensor  // Sign function.
-	Abs(x *RawTensor) *RawTensor   // Absolute value.
+	Exp(x *RawTensor) *RawTensor                           // Exponential.
+	Log(x *RawTensor) *RawTensor                           // Natural logarithm.
+	Sqrt(x *RawTensor) *RawTensor                          // Square root.
+	Rsqrt(x *RawTensor) *RawTensor                         // Reciprocal square root (1/sqrt(x)).
+	Cos(x *RawTensor) *RawTensor                           // Cosine.
+	Sin(x *RawTensor) *RawTensor                           // Sine.
+	Erf(x *RawTensor) *RawTensor                           // Error function (erf).
+	Sign(x *RawTensor) *RawTensor                          // Sign function.
+	Abs(x *RawTensor) *RawTensor                           // Absolute value.
+	Clamp(x *RawTensor, minBound, maxBound any) *RawTensor // Clamp values to [min, max].
 
 	// Activation functions.
 	Softmax(x *RawTensor, dim int) *RawTensor // Softmax along dimension.

@@ -6,6 +6,7 @@ package webgpu
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 
 	"github.com/born-ml/born/internal/tensor"
 	"github.com/gogpu/gputypes"
@@ -275,6 +276,74 @@ func (b *Backend) SignGPU(t *GPUTensor) *GPUTensor {
 // Data stays on GPU - no CPU transfer occurs.
 func (b *Backend) AbsGPU(t *GPUTensor) *GPUTensor {
 	return b.runUnaryOpGPU(t, "abs", absShader)
+}
+
+// ClampGPU applies clamp activation on GPU: clamp(x, min, max).
+// Data stays on GPU - no CPU transfer occurs.
+func (b *Backend) ClampGPU(t *GPUTensor, min, max any) *GPUTensor {
+	// Validate dtype
+	if t.dtype != tensor.Float32 && t.dtype != tensor.Int32 {
+		panic(fmt.Sprintf("webgpu: ClampGPU: only float32 and int32 supported, got %s", t.dtype))
+	}
+
+	shaderName, shaderCode := selectBinaryShader(t.dtype, "clamp", clampShader, clampShaderInt32)
+
+	numElements := t.NumElements()
+
+	// Compile shader
+	shader := b.compileShader(shaderName, shaderCode)
+
+	// Get or create pipeline
+	pipeline := b.getOrCreatePipeline(shaderName, shader, bglBinary)
+
+	// Create output buffer (stays on GPU!)
+	resultSize := t.ByteSize()
+	bufferResult, err := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc | gputypes.BufferUsageCopyDst,
+		Size:  resultSize,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("webgpu: ClampGPU: failed to create result buffer: %v", err))
+	}
+
+	// Create uniform buffer for params (size: u32, min: f32/i32, max: f32/i32)
+	params := make([]byte, 16)                                      // 16-byte aligned
+	binary.LittleEndian.PutUint32(params[0:4], uint32(numElements)) //nolint:gosec // G115: integer overflow conversion int -> uint32
+
+	if t.dtype == tensor.Float32 {
+		minVal := min.(float32)
+		maxVal := max.(float32)
+		binary.LittleEndian.PutUint32(params[4:8], math.Float32bits(minVal))
+		binary.LittleEndian.PutUint32(params[8:12], math.Float32bits(maxVal))
+	} else {
+		minVal := min.(int32)
+		maxVal := max.(int32)
+		binary.LittleEndian.PutUint32(params[4:8], uint32(minVal))  //nolint:gosec
+		binary.LittleEndian.PutUint32(params[8:12], uint32(maxVal)) //nolint:gosec
+	}
+
+	bufferParams := b.createUniformBuffer(params)
+	defer bufferParams.Release()
+
+	// Get bind group layout and create bind group
+	bg := b.createBindGroupFromBuffers(pipeline.layout, []bindGroupBuffer{
+		bufBinding(t.buffer, t.bufferSize),
+		bufBinding(bufferResult, resultSize),
+		bufBinding(bufferParams, 16),
+	})
+	defer bg.Release()
+
+	workgroups := uint32((numElements + workgroupSize - 1) / workgroupSize) //nolint:gosec // G115: integer overflow conversion int -> uint32
+	b.execComputePass(pipeline.pipeline, bg, workgroups, 1, 1)
+
+	// Return GPUTensor (NO readBuffer!)
+	return &GPUTensor{
+		buffer:     bufferResult,
+		bufferSize: resultSize,
+		shape:      t.shape,
+		dtype:      t.dtype,
+		backend:    b,
+	}
 }
 
 // SoftmaxGPU applies softmax activation along the specified dimension.

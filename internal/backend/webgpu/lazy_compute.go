@@ -1410,3 +1410,67 @@ func (b *Backend) runSumLazy(input *tensor.RawTensor) (*tensor.RawTensor, error)
 		return nil, errUnsupportedDType(dtype)
 	}
 }
+
+// runClampLazy executes element-wise clamping with lazy result.
+// clamp(x, min, max) - data stays on GPU until Data() is called.
+func (b *Backend) runClampLazy(input *tensor.RawTensor, minBound, maxBound any) (*tensor.RawTensor, error) {
+	dtype := input.DType()
+	if dtype != tensor.Float32 && dtype != tensor.Int32 {
+		return nil, errUnsupportedDType(dtype)
+	}
+
+	numElements := input.NumElements()
+
+	shaderName, shaderCode := selectBinaryShader(dtype, "clamp", clampShader, clampShaderInt32)
+
+	shader := b.compileShader(shaderName, shaderCode)
+	pipeline := b.getOrCreatePipeline(shaderName, shader)
+
+	bufferInput := b.createBufferFromTensor(input)
+	defer bufferInput.Release()
+
+	resultSize := uint64(input.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
+	bufferResult := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc | gputypes.BufferUsageCopyDst,
+		Size:  resultSize,
+	})
+
+	params := make([]byte, 16)
+	putUint32LE(params[0:4], uint32(numElements))
+
+	if dtype == tensor.Float32 {
+		putFloat32LE(params[4:8], minBound.(float32))
+		putFloat32LE(params[8:12], maxBound.(float32))
+	} else {
+		putInt32LE(params[4:8], minBound.(int32))
+		putInt32LE(params[8:12], maxBound.(int32))
+	}
+	bufferParams := b.createUniformBuffer(params)
+	defer bufferParams.Release()
+
+	bindGroupLayout := pipeline.GetBindGroupLayout(0)
+	bindGroup := b.device.CreateBindGroupSimple(bindGroupLayout, []wgpu.BindGroupEntry{
+		wgpu.BufferBindingEntry(0, bufferInput, 0, resultSize),
+		wgpu.BufferBindingEntry(1, bufferResult, 0, resultSize),
+		wgpu.BufferBindingEntry(2, bufferParams, 0, 16),
+	})
+	defer bindGroup.Release()
+
+	encoder := b.device.CreateCommandEncoder(nil)
+	computePass := encoder.BeginComputePass(nil)
+	computePass.SetPipeline(pipeline)
+	computePass.SetBindGroup(0, bindGroup, nil)
+	workgroups := uint32((numElements + workgroupSize - 1) / workgroupSize) //nolint:gosec // G115: integer overflow conversion int -> uint32
+	computePass.DispatchWorkgroups(workgroups, 1, 1)
+	computePass.End()
+
+	cmdBuffer := encoder.Finish(nil)
+	b.queueCommand(cmdBuffer)
+
+	return b.createLazyResult(bufferResult, resultSize, input.Shape(), dtype)
+}
+
+// putInt32LE writes an int32 to a byte slice in little-endian order.
+func putInt32LE(b []byte, v int32) {
+	putUint32LE(b, uint32(v)) //nolint:gosec // G115: safe, int32 fits in uint32
+}

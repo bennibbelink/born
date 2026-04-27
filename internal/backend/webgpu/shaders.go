@@ -346,6 +346,48 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 `
 
+// clampShader performs element-wise clamping: result = clamp(x, min, max).
+const clampShader = `
+@group(0) @binding(0) var<storage, read> input: array<f32>;
+@group(0) @binding(1) var<storage, read_write> result: array<f32>;
+
+struct Params {
+    size: u32,
+    min: f32,
+    max: f32,
+}
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    if (idx < params.size) {
+        result[idx] = clamp(input[idx], params.min, params.max);
+    }
+}
+`
+
+// clampShaderInt32 performs element-wise clamping for int32: result = clamp(x, min, max).
+const clampShaderInt32 = `
+@group(0) @binding(0) var<storage, read> input: array<i32>;
+@group(0) @binding(1) var<storage, read_write> result: array<i32>;
+
+struct Params {
+    size: u32,
+    min: i32,
+    max: i32,
+}
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    if (idx < params.size) {
+        result[idx] = clamp(input[idx], params.min, params.max);
+    }
+}
+`
+
 // scalarMulShader performs scalar multiplication: result = x * scalar.
 const scalarMulShader = `
 @group(0) @binding(0) var<storage, read> input: array<f32>;

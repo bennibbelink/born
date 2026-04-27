@@ -392,6 +392,26 @@ func (b *Backend) Abs(x *tensor.RawTensor) *tensor.RawTensor {
 	return result
 }
 
+// Clamp restricts tensor values element-wise to [minBound, maxBound].
+//
+// Supports float32 and int32 dtypes. Will raise a panic if called with unsupported dtype.
+func (b *Backend) Clamp(x *tensor.RawTensor, minBound, maxBound any) *tensor.RawTensor {
+	if x.DType() != tensor.Float32 && x.DType() != tensor.Int32 {
+		panic(fmt.Sprintf("webgpu: Clamp currently supports only Float32 and Int32, got %s", x.DType()))
+	}
+	var result *tensor.RawTensor
+	var err error
+	if b.LazyMode {
+		result, err = b.runClampLazy(x, minBound, maxBound)
+	} else {
+		result, err = b.runClamp(x, minBound, maxBound)
+	}
+	if err != nil {
+		panic("webgpu: Clamp: " + err.Error())
+	}
+	return result
+}
+
 // Erf computes element-wise error function on GPU.
 func (b *Backend) Erf(x *tensor.RawTensor) *tensor.RawTensor {
 	var result *tensor.RawTensor

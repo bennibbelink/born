@@ -967,6 +967,22 @@ func (b *AutodiffBackend[B]) Gather(x *tensor.RawTensor, dim int, index *tensor.
 	return result
 }
 
+// Clamp restricts tensor values element-wise to [minBound, maxBound].
+func (b *AutodiffBackend[B]) Clamp(x *tensor.RawTensor, minBound, maxBound any) *tensor.RawTensor {
+	defer x.ForceNonUnique()()
+
+	// Perform forward pass
+	result := b.inner.Clamp(x, minBound, maxBound)
+
+	// Record operation for gradient computation
+	if b.tape.IsRecording() {
+		op := ops.NewClampOp(x, minBound, maxBound, result)
+		b.tape.Record(op)
+	}
+
+	return result
+}
+
 // Where performs conditional element selection.
 //
 // output[i] = x[i] if condition[i] else y[i]

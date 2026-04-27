@@ -756,6 +756,69 @@ func (b *Backend) runTranspose(input *tensor.RawTensor) (*tensor.RawTensor, erro
 	return result, nil
 }
 
+// runClamp executes element-wise clamping: clamp(x, min, max) on GPU.
+// Supports float32 and int32 dtypes.
+func (b *Backend) runClamp(input *tensor.RawTensor, minBound, maxBound any) (*tensor.RawTensor, error) {
+	dtype := input.DType()
+	if dtype != tensor.Float32 && dtype != tensor.Int32 {
+		return nil, fmt.Errorf("webgpu: Clamp: only float32 and int32 are supported, got %s", dtype)
+	}
+
+	numElements := input.NumElements()
+
+	shaderName, shaderCode := selectBinaryShader(dtype, "clamp", clampShader, clampShaderInt32)
+
+	shader := b.compileShader(shaderName, shaderCode)
+	pipeline := b.getOrCreatePipeline(shaderName, shader, bglUnary)
+
+	bufferInput := b.createBuffer(input.Data(), gputypes.BufferUsageStorage|gputypes.BufferUsageCopySrc)
+	defer bufferInput.Release()
+
+	resultSize := uint64(input.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
+	bufferResult, err := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc | gputypes.BufferUsageCopyDst,
+		Size:  resultSize,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("webgpu: create result buffer: %w", err)
+	}
+	defer bufferResult.Release()
+
+	params := make([]byte, 16)                                      // 16-byte aligned: size + min + max
+	binary.LittleEndian.PutUint32(params[0:4], uint32(numElements)) //nolint:gosec // G115: integer overflow conversion int -> uint32
+
+	if dtype == tensor.Float32 {
+		minVal := minBound.(float32)
+		maxVal := maxBound.(float32)
+		binary.LittleEndian.PutUint32(params[4:8], math.Float32bits(minVal))
+		binary.LittleEndian.PutUint32(params[8:12], math.Float32bits(maxVal))
+	} else {
+		minVal := minBound.(int32)
+		maxVal := maxBound.(int32)
+		binary.LittleEndian.PutUint32(params[4:8], uint32(minVal))  //nolint:gosec // G115: safe, int32 fits in uint32
+		binary.LittleEndian.PutUint32(params[8:12], uint32(maxVal)) //nolint:gosec // G115: safe, int32 fits in uint32
+	}
+	bufferParams := b.createUniformBuffer(params)
+	defer bufferParams.Release()
+
+	bg := b.createBindGroupFromBuffers(pipeline.layout, []bindGroupBuffer{
+		bufBinding(bufferInput, resultSize),
+		bufBinding(bufferResult, resultSize),
+		bufBinding(bufferParams, 16),
+	})
+	defer bg.Release()
+
+	workgroups := uint32((numElements + workgroupSize - 1) / workgroupSize) //nolint:gosec // G115: integer overflow conversion int -> uint32
+	resultData := b.execComputeAndRead(pipeline.pipeline, bg, workgroups, 1, 1, bufferResult, resultSize)
+
+	result, err := tensor.NewRaw(input.Shape(), dtype, tensor.WebGPU)
+	if err != nil {
+		return nil, err
+	}
+	copy(result.Data(), resultData)
+	return result, nil
+}
+
 // runScalarOp executes a scalar operation (MulScalar, AddScalar, etc.) on GPU.
 // The shader params contain both size (u32) and scalar value (f32).
 func (b *Backend) runScalarOp(input *tensor.RawTensor, scalar float32, shaderName, shaderCode string) (*tensor.RawTensor, error) {

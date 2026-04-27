@@ -1410,3 +1410,85 @@ func (b *Backend) runSumLazy(input *tensor.RawTensor) (*tensor.RawTensor, error)
 		return nil, errUnsupportedDType(dtype)
 	}
 }
+
+// runClampLazy executes element-wise clamping with lazy result.
+// clamp(x, min, max) - data stays on GPU until Data() is called.
+func (b *Backend) runClampLazy(input *tensor.RawTensor, minBound, maxBound any) (*tensor.RawTensor, error) {
+	dtype := input.DType()
+	if dtype != tensor.Float32 && dtype != tensor.Int32 {
+		return nil, errUnsupportedDType(dtype)
+	}
+
+	numElements := input.NumElements()
+
+	shaderName, shaderCode := selectBinaryShader(dtype, "clamp", clampShader, clampShaderInt32)
+
+	shader := b.compileShader(shaderName, shaderCode)
+	pipeline := b.getOrCreatePipeline(shaderName, shader, bglUnary)
+
+	bufferInput := b.createBufferFromTensor(input)
+	defer bufferInput.Release()
+
+	resultSize := uint64(input.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
+	bufferResult, err := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc | gputypes.BufferUsageCopyDst,
+		Size:  resultSize,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("runClampLazy: create result buffer: %w", err)
+	}
+	defer bufferResult.Release()
+
+	stagingBuf, err := b.device.CreateBuffer(&wgpu.BufferDescriptor{
+		Usage: gputypes.BufferUsageMapRead | gputypes.BufferUsageCopyDst | gputypes.BufferUsageCopySrc,
+		Size:  resultSize,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("runBinaryOpLazy: create staging buffer: %w", err)
+	}
+
+	params := make([]byte, 16)
+	putUint32LE(params[0:4], uint32(numElements)) //nolint:gosec // G115: integer overflow conversion int -> uint32
+
+	if dtype == tensor.Float32 {
+		putFloat32LE(params[4:8], minBound.(float32))
+		putFloat32LE(params[8:12], maxBound.(float32))
+	} else {
+		putInt32LE(params[4:8], minBound.(int32))
+		putInt32LE(params[8:12], maxBound.(int32))
+	}
+	bufferParams := b.createUniformBuffer(params)
+	defer bufferParams.Release()
+
+	bg := b.createBindGroupFromBuffers(pipeline.layout, []bindGroupBuffer{
+		bufBinding(bufferInput, resultSize),
+		bufBinding(bufferResult, resultSize),
+		bufBinding(bufferParams, 16),
+	})
+	defer bg.Release()
+
+	encoder, encErr := b.device.CreateCommandEncoder(nil)
+	if encErr != nil {
+		stagingBuf.Release()
+		return nil, fmt.Errorf("runClampLazy: create command encoder: %w", encErr)
+	}
+	computePass, cpErr := encoder.BeginComputePass(nil)
+	if cpErr != nil {
+		return nil, fmt.Errorf("runClampLazy: begin compute pass: %w", cpErr)
+	}
+	computePass.SetPipeline(pipeline.pipeline)
+	computePass.SetBindGroup(0, bg, nil)
+	workgroups := uint32((numElements + workgroupSize - 1) / workgroupSize) //nolint:gosec // G115: integer overflow conversion int -> uint32
+	computePass.Dispatch(workgroups, 1, 1)
+	if endErr := computePass.End(); endErr != nil {
+		stagingBuf.Release()
+		panic(fmt.Sprintf("webgpu: compute pass end error: %v", endErr))
+	}
+
+	return b.finishAndSubmitLazy(encoder, bufferResult, stagingBuf, resultSize, input.Shape(), dtype, "runClampLazy")
+}
+
+// putInt32LE writes an int32 to a byte slice in little-endian order.
+func putInt32LE(b []byte, v int32) {
+	putUint32LE(b, uint32(v)) //nolint:gosec // G115: safe, int32 fits in uint32
+}

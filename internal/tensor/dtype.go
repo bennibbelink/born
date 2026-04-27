@@ -1,6 +1,8 @@
 // Package tensor provides the core tensor types and operations for Born ML framework.
 package tensor
 
+import "fmt"
+
 // DType is a constraint for supported tensor data types.
 // It uses Go generics to ensure compile-time type safety.
 type DType interface {
@@ -72,4 +74,16 @@ func inferDataType[T DType](dummy T) DataType {
 	default:
 		panic("unsupported type")
 	}
+}
+
+// CheckScalarDType checks if the value matches the expected type.
+//
+// Panics if they do not match.
+func CheckScalarDType[T DType](val any) T {
+	casted, ok := val.(T)
+	if !ok {
+		panic(fmt.Sprintf("tensor: expected %T, got %T", new(T), val))
+	}
+
+	return casted
 }

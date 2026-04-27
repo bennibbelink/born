@@ -3,6 +3,7 @@
 package webgpu
 
 import (
+	"encoding/binary"
 	"math"
 	"testing"
 
@@ -63,6 +64,43 @@ func compareSlices(t *testing.T, expected, actual []float32, tolerance float32) 
 	return true
 }
 
+func createInt32Tensor(t *testing.T, shape tensor.Shape, data []int32) *tensor.RawTensor {
+	t.Helper()
+	raw, err := tensor.NewRaw(shape, tensor.Int32, tensor.WebGPU)
+	if err != nil {
+		t.Fatalf("failed to create tensor: %v", err)
+	}
+	byteData := raw.Data()
+	for i, v := range data {
+		binary.LittleEndian.PutUint32(byteData[i*4:i*4+4], uint32(v))
+	}
+	return raw
+}
+
+func extractInt32Data(t *testing.T, raw *tensor.RawTensor) []int32 {
+	t.Helper()
+	byteData := raw.Data()
+	result := make([]int32, raw.NumElements())
+	for i := range result {
+		result[i] = int32(binary.LittleEndian.Uint32(byteData[i*4 : i*4+4]))
+	}
+	return result
+}
+
+func compareInt32Slices(t *testing.T, expected, actual []int32) bool {
+	t.Helper()
+	if len(expected) != len(actual) {
+		t.Errorf("length mismatch: expected %d, got %d", len(expected), len(actual))
+		return false
+	}
+	for i := range expected {
+		if expected[i] != actual[i] {
+			t.Errorf("value mismatch at index %d: expected %d, got %d", i, expected[i], actual[i])
+			return false
+		}
+	}
+	return true
+}
 func TestAdd(t *testing.T) {
 	if !computeAvailable {
 		t.Skip("WebGPU not available")

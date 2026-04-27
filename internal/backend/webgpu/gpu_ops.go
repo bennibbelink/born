@@ -278,9 +278,9 @@ func (b *Backend) AbsGPU(t *GPUTensor) *GPUTensor {
 	return b.runUnaryOpGPU(t, "abs", absShader)
 }
 
-// ClampGPU applies clamp activation on GPU: clamp(x, min, max).
+// ClampGPU applies clamp activation on GPU: clamp(x, minValue, maxValue).
 // Data stays on GPU - no CPU transfer occurs.
-func (b *Backend) ClampGPU(t *GPUTensor, min, max any) *GPUTensor {
+func (b *Backend) ClampGPU(t *GPUTensor, minValue, maxValue any) *GPUTensor {
 	// Validate dtype
 	if t.dtype != tensor.Float32 && t.dtype != tensor.Int32 {
 		panic(fmt.Sprintf("webgpu: ClampGPU: only float32 and int32 supported, got %s", t.dtype))
@@ -311,13 +311,13 @@ func (b *Backend) ClampGPU(t *GPUTensor, min, max any) *GPUTensor {
 	binary.LittleEndian.PutUint32(params[0:4], uint32(numElements)) //nolint:gosec // G115: integer overflow conversion int -> uint32
 
 	if t.dtype == tensor.Float32 {
-		minVal := min.(float32)
-		maxVal := max.(float32)
+		minVal := tensor.CheckScalarDType[float32](minValue)
+		maxVal := tensor.CheckScalarDType[float32](maxValue)
 		binary.LittleEndian.PutUint32(params[4:8], math.Float32bits(minVal))
 		binary.LittleEndian.PutUint32(params[8:12], math.Float32bits(maxVal))
 	} else {
-		minVal := min.(int32)
-		maxVal := max.(int32)
+		minVal := tensor.CheckScalarDType[int32](minValue)
+		maxVal := tensor.CheckScalarDType[int32](maxValue)
 		binary.LittleEndian.PutUint32(params[4:8], uint32(minVal))  //nolint:gosec
 		binary.LittleEndian.PutUint32(params[8:12], uint32(maxVal)) //nolint:gosec
 	}

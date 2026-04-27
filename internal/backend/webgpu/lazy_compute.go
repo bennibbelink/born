@@ -1448,7 +1448,7 @@ func (b *Backend) runClampLazy(input *tensor.RawTensor, minBound, maxBound any) 
 	}
 
 	params := make([]byte, 16)
-	putUint32LE(params[0:4], uint32(numElements))
+	putUint32LE(params[0:4], uint32(numElements)) //nolint:gosec // G115: integer overflow conversion int -> uint32
 
 	if dtype == tensor.Float32 {
 		putFloat32LE(params[4:8], minBound.(float32))

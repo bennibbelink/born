@@ -11,7 +11,7 @@ import (
 )
 
 func TestClamp_Float32(t *testing.T) {
-	if !IsAvailable() {
+	if !computeAvailable {
 		t.Skip("WebGPU not available")
 	}
 
@@ -119,7 +119,7 @@ func TestClamp_Float32(t *testing.T) {
 }
 
 func TestClamp_Int32(t *testing.T) {
-	if !IsAvailable() {
+	if !computeAvailable {
 		t.Skip("WebGPU not available")
 	}
 
@@ -205,7 +205,7 @@ func TestClamp_Int32(t *testing.T) {
 }
 
 func TestClamp_LargeTensor(t *testing.T) {
-	if !IsAvailable() {
+	if !computeAvailable {
 		t.Skip("WebGPU not available")
 	}
 

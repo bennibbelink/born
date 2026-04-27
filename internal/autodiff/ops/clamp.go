@@ -35,25 +35,25 @@ func (op *ClampOp) Backward(outputGrad *tensor.RawTensor, backend tensor.Backend
 
 	switch input.DType() {
 	case tensor.Int32:
-		minBound := tensor.CheckScalarDtype[int32](op.minBound)
-		maxBound := tensor.CheckScalarDtype[int32](op.maxBound)
+		minBound := tensor.CheckScalarDType[int32](op.minBound)
+		maxBound := tensor.CheckScalarDType[int32](op.maxBound)
 		maskedGrad := clampBackwardGeneric(outputGrad, input, minBound, maxBound, backend)
 		return []*tensor.RawTensor{maskedGrad}
 	case tensor.Int64:
-		minBound := tensor.CheckScalarDtype[int64](op.minBound)
-		maxBound := tensor.CheckScalarDtype[int64](op.maxBound)
+		minBound := tensor.CheckScalarDType[int64](op.minBound)
+		maxBound := tensor.CheckScalarDType[int64](op.maxBound)
 		maskedGrad := clampBackwardGeneric(outputGrad, input, minBound, maxBound, backend)
 		return []*tensor.RawTensor{maskedGrad}
 
 	case tensor.Float32:
-		minBound := tensor.CheckScalarDtype[float32](op.minBound)
-		maxBound := tensor.CheckScalarDtype[float32](op.maxBound)
+		minBound := tensor.CheckScalarDType[float32](op.minBound)
+		maxBound := tensor.CheckScalarDType[float32](op.maxBound)
 		maskedGrad := clampBackwardGeneric(outputGrad, input, minBound, maxBound, backend)
 		return []*tensor.RawTensor{maskedGrad}
 
 	case tensor.Float64:
-		minBound := tensor.CheckScalarDtype[float64](op.minBound)
-		maxBound := tensor.CheckScalarDtype[float64](op.maxBound)
+		minBound := tensor.CheckScalarDType[float64](op.minBound)
+		maxBound := tensor.CheckScalarDType[float64](op.maxBound)
 		maskedGrad := clampBackwardGeneric(outputGrad, input, minBound, maxBound, backend)
 		return []*tensor.RawTensor{maskedGrad}
 	default:

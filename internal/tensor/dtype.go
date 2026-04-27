@@ -76,10 +76,10 @@ func inferDataType[T DType](dummy T) DataType {
 	}
 }
 
-// CheckScalarDtype checks if the value matches the expected type.
+// CheckScalarDType checks if the value matches the expected type.
 //
 // Panics if they do not match.
-func CheckScalarDtype[T int32 | int64 | float32 | float64](val any) T {
+func CheckScalarDType[T DType](val any) T {
 	casted, ok := val.(T)
 	if !ok {
 		panic(fmt.Sprintf("tensor: expected %T, got %T", new(T), val))

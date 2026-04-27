@@ -20,22 +20,22 @@ func (cpu *CPUBackend) Clamp(input *tensor.RawTensor, minBound, maxBound any) *t
 	// otherwise, perform normal clamp operation
 	switch input.DType() {
 	case tensor.Int32:
-		castedMin := tensor.CheckScalarDtype[int32](minBound)
-		castedMax := tensor.CheckScalarDtype[int32](maxBound)
+		castedMin := tensor.CheckScalarDType[int32](minBound)
+		castedMax := tensor.CheckScalarDType[int32](maxBound)
 		if castedMin > castedMax {
 			return tensor.Full(input.Shape(), castedMax, cpu).Raw()
 		}
 		result = clampGeneric(input, castedMin, castedMax, cpu)
 	case tensor.Int64:
-		castedMin := tensor.CheckScalarDtype[int64](minBound)
-		castedMax := tensor.CheckScalarDtype[int64](maxBound)
+		castedMin := tensor.CheckScalarDType[int64](minBound)
+		castedMax := tensor.CheckScalarDType[int64](maxBound)
 		if castedMin > castedMax {
 			return tensor.Full(input.Shape(), castedMax, cpu).Raw()
 		}
 		result = clampGeneric(input, castedMin, castedMax, cpu)
 	case tensor.Float32:
-		castedMin := tensor.CheckScalarDtype[float32](minBound)
-		castedMax := tensor.CheckScalarDtype[float32](maxBound)
+		castedMin := tensor.CheckScalarDType[float32](minBound)
+		castedMax := tensor.CheckScalarDType[float32](maxBound)
 		checkNaN(castedMin)
 		checkNaN(castedMax)
 		if castedMin > castedMax {
@@ -43,8 +43,8 @@ func (cpu *CPUBackend) Clamp(input *tensor.RawTensor, minBound, maxBound any) *t
 		}
 		result = clampGeneric(input, castedMin, castedMax, cpu)
 	case tensor.Float64:
-		castedMin := tensor.CheckScalarDtype[float64](minBound)
-		castedMax := tensor.CheckScalarDtype[float64](maxBound)
+		castedMin := tensor.CheckScalarDType[float64](minBound)
+		castedMax := tensor.CheckScalarDType[float64](maxBound)
 		checkNaN(castedMin)
 		checkNaN(castedMax)
 		if castedMin > castedMax {

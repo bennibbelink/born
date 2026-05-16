@@ -88,6 +88,17 @@ type Backend interface {
 	Where(condition, x, y *RawTensor) *RawTensor               // conditional element selection
 	Embedding(weight, indices *RawTensor) *RawTensor           // lookup embeddings by indices
 
+	// SelectAdd performs a scatter-add: accumulates src rows into dest at indexed positions.
+	//
+	// For dim=0 (the primary use case for Embedding backward):
+	//
+	//	dest: [V, D], indices: [N] (int32), src: [N, D]
+	//	For each i: result[indices[i], :] += src[i, :]
+	//
+	// Returns a new tensor (dest is not modified in-place).
+	// Semantics follow Burn's float_select_add: scatter-add along the given dimension.
+	SelectAdd(dest *RawTensor, dim int, indices *RawTensor, src *RawTensor) *RawTensor
+
 	// Shape operations (broadcast)
 	Expand(x *RawTensor, shape Shape) *RawTensor // broadcast to shape
 

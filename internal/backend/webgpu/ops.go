@@ -702,6 +702,103 @@ func (b *Backend) Unsqueeze(x *tensor.RawTensor, dim int) *tensor.RawTensor {
 	return b.Reshape(x, newShape)
 }
 
+// SelectAdd performs a scatter-add along the specified dimension.
+//
+// This operation is used primarily in Embedding backward to accumulate gradient
+// rows into the weight gradient tensor. GPU atomics (required for a proper WGSL
+// scatter-add) are available via atomicAdd for u32/i32 but not for f32 in
+// WebGPU core; an emulated f32 atomic would add significant kernel complexity.
+//
+// For now this falls back to the CPU: data is transferred from GPU to CPU via
+// Data(), the scatter-add runs in Go, and the result is returned as a CPU-device
+// tensor. A native GPU kernel can replace this in a future TASK without any API
+// change.
+func (b *Backend) SelectAdd(dest *tensor.RawTensor, dim int, indices, src *tensor.RawTensor) *tensor.RawTensor {
+	if indices.DType() != tensor.Int32 {
+		panic("webgpu: SelectAdd: indices must be int32")
+	}
+
+	destShape := dest.Shape()
+	srcShape := src.Shape()
+	ndim := len(destShape)
+
+	if dim < 0 {
+		dim += ndim
+	}
+	if dim < 0 || dim >= ndim {
+		panic(fmt.Sprintf("webgpu: SelectAdd: dim %d out of range for %dD tensor", dim, ndim))
+	}
+
+	numIndices := indices.Shape()[0]
+
+	if len(srcShape) != ndim {
+		panic(fmt.Sprintf("webgpu: SelectAdd: src rank %d != dest rank %d", len(srcShape), ndim))
+	}
+	if srcShape[dim] != numIndices {
+		panic(fmt.Sprintf("webgpu: SelectAdd: src dim %d (%d) != len(indices) (%d)", dim, srcShape[dim], numIndices))
+	}
+
+	// Clone dest data into a new result tensor.
+	result, err := tensor.NewRaw(destShape, dest.DType(), tensor.WebGPU)
+	if err != nil {
+		panic("webgpu: SelectAdd: " + err.Error())
+	}
+	copy(result.Data(), dest.Data())
+
+	idxData := indices.AsInt32()
+
+	dstStrides := destShape.ComputeStrides()
+	srcStrides := srcShape.ComputeStrides()
+	innerSize := srcShape.NumElements() / srcShape[dim]
+	srcDimStride := srcStrides[dim]
+	dstDimStride := dstStrides[dim]
+
+	switch dest.DType() {
+	case tensor.Float32:
+		dst := result.AsFloat32()
+		srcData := src.AsFloat32()
+		for i := 0; i < numIndices; i++ {
+			idx := int(idxData[i])
+			if idx < 0 || idx >= destShape[dim] {
+				panic(fmt.Sprintf("webgpu: SelectAdd: index %d out of bounds [0, %d)", idx, destShape[dim]))
+			}
+			for j := 0; j < innerSize; j++ {
+				nonDimFlat := webgpuSelectAddNonDimFlat(j, srcShape, dstStrides, dim)
+				dst[idx*dstDimStride+nonDimFlat] += srcData[i*srcDimStride+nonDimFlat]
+			}
+		}
+	default:
+		panic(fmt.Sprintf("webgpu: SelectAdd: unsupported dtype %s", dest.DType()))
+	}
+
+	return result
+}
+
+// webgpuSelectAddNonDimFlat computes the flat-index contribution from dimensions
+// other than dim, given a linear index j enumerating elements in those dimensions.
+// Uses srcShape for coordinate decomposition and dstStrides for flat-index mapping
+// (they are identical for non-scatter dims by the SelectAdd precondition).
+func webgpuSelectAddNonDimFlat(j int, srcShape tensor.Shape, dstStrides []int, dim int) int {
+	ndim := len(srcShape)
+	flat := 0
+	rem := j
+	for d := 0; d < ndim; d++ {
+		if d == dim {
+			continue
+		}
+		nonDimStride := 1
+		for dd := d + 1; dd < ndim; dd++ {
+			if dd != dim {
+				nonDimStride *= srcShape[dd]
+			}
+		}
+		coord := rem / nonDimStride
+		rem %= nonDimStride
+		flat += coord * dstStrides[d]
+	}
+	return flat
+}
+
 // Squeeze removes a dimension of size 1 at the specified position.
 func (b *Backend) Squeeze(x *tensor.RawTensor, dim int) *tensor.RawTensor {
 	shape := x.Shape()

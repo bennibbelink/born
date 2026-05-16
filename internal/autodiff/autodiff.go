@@ -1045,6 +1045,16 @@ func (b *AutodiffBackend[B]) Embedding(weight, indices *tensor.RawTensor) *tenso
 	return result
 }
 
+// SelectAdd performs a scatter-add along the specified dimension (autodiff proxy).
+//
+// SelectAdd is used only inside backward passes (e.g., Embedding backward) and
+// does not need to be recorded on the tape: it computes gradients, not forward
+// values. Delegating directly to the inner backend mirrors the pattern used for
+// Conv2DInputBackward and MaxPool2DBackward.
+func (b *AutodiffBackend[B]) SelectAdd(dest *tensor.RawTensor, dim int, indices, src *tensor.RawTensor) *tensor.RawTensor {
+	return b.inner.SelectAdd(dest, dim, indices, src)
+}
+
 // Conv2DInputBackward computes gradient w.r.t. input for Conv2D.
 // Delegates to inner backend (no recording needed - used during backward pass only).
 func (b *AutodiffBackend[B]) Conv2DInputBackward(input, kernel, grad *tensor.RawTensor, stride, padding int) *tensor.RawTensor {

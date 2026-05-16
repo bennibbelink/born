@@ -1,8 +1,6 @@
 package ops
 
 import (
-	"fmt"
-
 	"github.com/born-ml/born/internal/tensor"
 )
 
@@ -11,8 +9,8 @@ import (
 // Backward pass:
 //   - d(ReLU(x))/dx = 1 if x > 0, else 0
 //
-// The gradient is computed by creating a mask where input > 0, then
-// multiplying the output gradient by this mask.
+// The gradient is passed through where the input was positive, and blocked
+// (zero) everywhere else.
 type ReLUOp struct {
 	input  *tensor.RawTensor // x
 	output *tensor.RawTensor // max(0, x)
@@ -26,13 +24,33 @@ func NewReLUOp(input, output *tensor.RawTensor) *ReLUOp {
 	}
 }
 
-// Backward computes input gradient for ReLU.
+// Backward computes input gradient for ReLU using only backend ops (no CPU readback).
+//
+// d(ReLU(x))/dx = 1 if x > 0, else 0
+//
+//	zeros = x * 0             (same shape/dtype as x, all zeros)
+//	mask  = Greater(x, zeros) (Bool tensor: true where x > 0)
+//	grad  = Where(mask, outputGrad, zeros)
+//
+// The scalar 0 is typed to match the tensor's dtype as required by the backend.
 func (op *ReLUOp) Backward(outputGrad *tensor.RawTensor, backend tensor.Backend) []*tensor.RawTensor {
-	// Create mask: 1 where input > 0, 0 otherwise
-	mask := createReLUMask(op.input, backend)
+	// Typed zero scalar — backend.MulScalar requires scalar type == tensor dtype.
+	var zero any
+	switch op.input.DType() {
+	case tensor.Float32:
+		zero = float32(0)
+	default: // Float64
+		zero = float64(0)
+	}
 
-	// grad_input = outputGrad * mask
-	gradInput := backend.Mul(outputGrad, mask)
+	// zeros: same shape and dtype as input, all elements 0.0 — no data leaves device.
+	zeros := backend.MulScalar(op.input, zero)
+
+	// mask[i] = true where input[i] > 0 (returned as tensor.Bool dtype).
+	mask := backend.Greater(op.input, zeros)
+
+	// grad_input[i] = outputGrad[i] if mask[i] else 0.0
+	gradInput := backend.Where(mask, outputGrad, zeros)
 
 	return []*tensor.RawTensor{gradInput}
 }
@@ -45,43 +63,4 @@ func (op *ReLUOp) Inputs() []*tensor.RawTensor {
 // Output returns the output tensor max(0, x).
 func (op *ReLUOp) Output() *tensor.RawTensor {
 	return op.output
-}
-
-// createReLUMask creates a binary mask where input > 0.
-func createReLUMask(input *tensor.RawTensor, backend tensor.Backend) *tensor.RawTensor {
-	// Create a tensor of same shape as input
-	mask, err := tensor.NewRaw(input.Shape(), input.DType(), backend.Device())
-	if err != nil {
-		panic(fmt.Sprintf("relu: failed to create mask: %v", err))
-	}
-
-	// Set mask values based on input dtype
-	switch input.DType() {
-	case tensor.Float32:
-		inputData := input.AsFloat32()
-		maskData := mask.AsFloat32()
-		for i, val := range inputData {
-			if val > 0 {
-				maskData[i] = 1.0
-			} else {
-				maskData[i] = 0.0
-			}
-		}
-
-	case tensor.Float64:
-		inputData := input.AsFloat64()
-		maskData := mask.AsFloat64()
-		for i, val := range inputData {
-			if val > 0 {
-				maskData[i] = 1.0
-			} else {
-				maskData[i] = 0.0
-			}
-		}
-
-	default:
-		panic(fmt.Sprintf("relu: unsupported dtype %s (only float32/float64 supported)", input.DType()))
-	}
-
-	return mask
 }

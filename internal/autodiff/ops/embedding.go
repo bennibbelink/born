@@ -55,6 +55,14 @@ func (op *EmbeddingOp) Output() *tensor.RawTensor {
 // accelerate it in the future without any change to this function.
 func (op *EmbeddingOp) Backward(gradOutput *tensor.RawTensor, backend tensor.Backend) []*tensor.RawTensor {
 	weightShape := op.weight.Shape()
+	embDim := weightShape[1]
+
+	// Flatten multi-dimensional inputs to 2D for SelectAdd.
+	// gradOutput: [B, S, D] or [N, D] → [N, D]
+	// indices:    [B, S] or [N]       → [N]
+	numIndices := op.indices.NumElements()
+	flatGrad := backend.Reshape(gradOutput, tensor.Shape{numIndices, embDim})
+	flatIdx := backend.Reshape(op.indices, tensor.Shape{numIndices})
 
 	// Zero-filled destination: same shape as the weight matrix [numEmbeddings, embDim].
 	gradWeight, err := tensor.NewRaw(weightShape, gradOutput.DType(), backend.Device())
@@ -62,10 +70,8 @@ func (op *EmbeddingOp) Backward(gradOutput *tensor.RawTensor, backend tensor.Bac
 		panic(err)
 	}
 
-	// Scatter-add: for each i, gradWeight[indices[i], :] += gradOutput[i, :]
-	// dim=0 matches Burn's float_select_add semantics for Embedding backward.
-	gradWeight = backend.SelectAdd(gradWeight, 0, op.indices, gradOutput)
+	// Scatter-add: for each i, gradWeight[flatIdx[i], :] += flatGrad[i, :]
+	gradWeight = backend.SelectAdd(gradWeight, 0, flatIdx, flatGrad)
 
-	// Indices are integer-typed and do not require a gradient.
 	return []*tensor.RawTensor{gradWeight}
 }

@@ -1,7 +1,7 @@
 # Born ML Framework - Philosophy & Design Principles
 
 **Status**: Living Document
-**Last Updated**: 2025-11-30
+**Last Updated**: 2026-05-16
 
 ---
 
@@ -92,6 +92,20 @@ This keeps research modifications local and reproducible.
 #### 6. Reproducibility via nn.SetSeed()
 
 `nn.SetSeed(seed)` sets the global random seed before weight initialization, ensuring identical starting conditions across runs — critical for debugging and fair comparisons.
+
+#### 7. Backward = Forward Ops Composition
+
+Following Burn (Rust), Born computes gradients by composing forward operations — not via handwritten backward kernels. This guarantees that backward runs on the same device as forward (CPU or GPU) with no data transfers:
+
+```go
+// SiLU backward — composed from Sigmoid, Mul, Add, Sub
+sig := backend.Sigmoid(x)
+oneMinusSig := backend.Sub(ones, sig)
+deriv := backend.Mul(sig, backend.Add(ones, backend.Mul(x, oneMinusSig)))
+gradInput := backend.Mul(outputGrad, deriv)
+```
+
+No `AsFloat32()`, no GPU→CPU readback, no Go loops. Tensors stay on the compute device throughout the entire forward+backward pass.
 
 ---
 

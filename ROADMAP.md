@@ -3,7 +3,7 @@
 > **Strategic Approach**: PyTorch-inspired API, Burn-inspired architecture, Go best practices
 > **Philosophy**: Correctness → Performance → Features
 
-**Last Updated**: 2026-05-16 | **Current Version**: v0.8.2 | **Strategy**: Core → GPU → LLM → ONNX → Inference Opt → Production → v1.0 LTS | **Milestone**: v0.8.0 (GoGPU Migration) → v0.8.1 (LLaMA Inference) → v0.8.2 (Tokenizer + Backward Ops) → v1.0.0 LTS
+**Last Updated**: 2026-05-16 | **Current Version**: v0.8.3 | **Strategy**: Core → GPU → LLM → ONNX → Inference Opt → Production → v1.0 LTS | **Milestone**: v0.8.0 (GoGPU Migration) → v0.8.1 (LLaMA Inference) → v0.8.2 (Tokenizer + Backward Ops) → v1.0.0 LTS
 
 ---
 
@@ -80,7 +80,9 @@ v0.8.0 (GoGPU/wgpu Migration — Pure Go, Zero CGO) ✅ RELEASED (2026-04-26)
        ↓ (LLaMA inference, GGUF loading, reproducibility)
 v0.8.1 (LLaMA Inference, GGUF Model Loading) ✅ RELEASED (2026-05-15)
        ↓ (tokenizer bug fix)
-v0.8.2 (Tokenizer Fix, Backward Ops Migration, Scalar Gradient Fix) → CURRENT (2026-05-16)
+v0.8.2 (Tokenizer Fix, Backward Ops Migration, Scalar Gradient Fix) ✅ RELEASED (2026-05-16)
+       ↓ (GPU scatter-add shaders)
+v0.8.3 (GPU SelectAdd/ScatterAdd Shaders) → CURRENT (2026-05-16)
        ↓ (CPU multi-threading, quantization improvements)
 v0.9.0 (CPU Multi-thread, PagedAttention, Kernel Fusion) → June 2026
        ↓ (scale & stability)
@@ -185,11 +187,16 @@ v1.0.0 LTS → After API stabilization
 - Tested: TinyLlama 1.1B Q8_0 — "Paris" top-1 for "The capital of France is"
 - Fixed: RoPE rotate-half, GGML naming, Q4_K/Q5_K scales, F16 subnormals, tied embeddings
 
-**v0.8.2** = Tokenizer Fix + Backward Ops Migration → CURRENT (2026-05-16)
+**v0.8.2** = Tokenizer Fix + Backward Ops Migration ✅ RELEASED (2026-05-16)
 - Fixed: HF tokenizer normalizer (SentencePiece Prepend+Replace). PPL 1887 → 230.
-- Fixed: Scalar ops (MulScalar/AddScalar/SubScalar/DivScalar) now on gradient tape. Embedding weights were getting zero gradients.
-- Refactored: 7 backward ops migrated from CPU-fallback to forward composition (ADR-009). GPU backward no longer forces GPU→CPU readback.
+- Fixed: Scalar ops on gradient tape. Embedding weights were getting zero gradients.
+- Refactored: 7 backward ops migrated from CPU-fallback to forward composition (ADR-009).
 - Added: SelectAdd, ScatterAdd backend ops for Embedding/Gather backward.
+
+**v0.8.3** = GPU SelectAdd/ScatterAdd Shaders → CURRENT (2026-05-16)
+- WGSL compute shaders for scatter-add (no f32 atomics, per-destination-row/element approach)
+- Eliminates 27K GPU→CPU readbacks per backward step
+- HRM training: step time from minutes to seconds
 
 **v0.9.0** = CPU Multi-thread & Production Serving → June 2026
 - CPU multi-threaded MatMul/BatchMatMul (TASK-133)

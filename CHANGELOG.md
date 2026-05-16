@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-05-16
+
+### Added
+
+- **WebGPU GPU compute shaders for SelectAdd/ScatterAdd** — eliminates CPU-fallback bottleneck
+  - SelectAdd: per-destination-row WGSL shader, no f32 atomics required
+  - ScatterAdd: per-destination-element WGSL shader, supports up to 6D tensors
+  - Results stay on GPU as lazy tensors — no GPU→CPU readback for intermediate backward results
+  - Before: 27K ReadGPUBuffer calls per HRM backward step. After: 1 GPU dispatch each
+  - HRM training: step time reduced from minutes to seconds
+  - 13 GPU tests with CPU-GPU numeric parity verification
+  - CPU fallback retained for non-lazy mode and unsupported dtypes
+- `BORN_DEBUG_GPU=1` environment variable for diagnostic stderr logging of ReadGPUBuffer Poll/Map calls
+
+### Fixed
+
+- **WebGPU ReadGPUBuffer**: 10s timeout on `buffer.Map()` to prevent infinite hang if staging buffer is in invalid state
+
 ## [0.8.2] - 2026-05-16
 
 ### Added

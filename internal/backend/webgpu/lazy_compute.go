@@ -1505,7 +1505,6 @@ func putInt32LE(b []byte, v int32) {
 //
 // The shader dispatches one invocation per destination row (per-row approach) to
 // avoid the need for f32 atomics, which are not available in WebGPU core WGSL.
-//
 func (b *Backend) runSelectAddLazy(dest, indices, src *tensor.RawTensor) (*tensor.RawTensor, error) {
 	if dest.DType() != tensor.Float32 {
 		return nil, &lazyError{msg: "selectAdd: dest must be float32"}
@@ -1519,9 +1518,9 @@ func (b *Backend) runSelectAddLazy(dest, indices, src *tensor.RawTensor) (*tenso
 
 	destShape := dest.Shape()
 	srcShape := src.Shape()
-	numRows := uint32(destShape[0])     //nolint:gosec // G115: safe, tensor dims are small positive ints
-	numIndices := uint32(srcShape[0])   //nolint:gosec // G115: safe, tensor dims are small positive ints
-	innerSize := uint32(destShape[1])   //nolint:gosec // G115: safe, tensor dims are small positive ints
+	numRows := uint32(destShape[0])   //nolint:gosec // G115: safe, tensor dims are small positive ints
+	numIndices := uint32(srcShape[0]) //nolint:gosec // G115: safe, tensor dims are small positive ints
+	innerSize := uint32(destShape[1]) //nolint:gosec // G115: safe, tensor dims are small positive ints
 
 	shader := b.compileShader("selectAdd", selectAddShader)
 	entry := b.getOrCreatePipeline("selectAdd", shader, bglScatter)
@@ -1674,7 +1673,7 @@ func (b *Backend) runScatterAddLazy(dest *tensor.RawTensor, dim int, indices, sr
 	params := make([]byte, paramsU32Count*4)
 	putUint32LE(params[0:4], numDestElements)
 	putUint32LE(params[4:8], numSrcElements)
-	putUint32LE(params[8:12], uint32(dim))  //nolint:gosec // G115: dim is non-negative and small
+	putUint32LE(params[8:12], uint32(dim)) //nolint:gosec // G115: dim is non-negative and small
 	putUint32LE(params[12:16], uint32(ndim))
 
 	// dest_shape[0..5] — pad with 1 for unused dimensions.

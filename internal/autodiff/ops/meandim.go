@@ -54,21 +54,9 @@ func (op *MeanDimOp) Backward(outputGrad *tensor.RawTensor, backend tensor.Backe
 	// Broadcast gradient to input shape
 	gradX := broadcastTo(grad, x.Shape(), backend)
 
-	// Divide by the size of the reduced dimension
-	divisor := float64(op.dimSize)
-	switch gradX.DType() {
-	case tensor.Float32:
-		data := gradX.AsFloat32()
-		divisorF32 := float32(divisor)
-		for i := range data {
-			data[i] /= divisorF32
-		}
-	case tensor.Float64:
-		data := gradX.AsFloat64()
-		for i := range data {
-			data[i] /= divisor
-		}
-	}
+	// Divide by the size of the reduced dimension via backend scalar multiply.
+	// This avoids direct CPU data access and keeps the op backend-agnostic.
+	gradX = mulScalarTyped(gradX, 1.0/float64(op.dimSize), backend)
 
 	return []*tensor.RawTensor{gradX}
 }

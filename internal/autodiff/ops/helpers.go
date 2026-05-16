@@ -6,6 +6,19 @@ import (
 	"github.com/born-ml/born/internal/tensor"
 )
 
+// mulScalarTyped multiplies t by a scalar matched to the tensor's dtype.
+// MulScalar type-asserts the scalar, so we must pass the correct Go type.
+func mulScalarTyped(t *tensor.RawTensor, value float64, backend tensor.Backend) *tensor.RawTensor {
+	switch t.DType() {
+	case tensor.Float32:
+		return backend.MulScalar(t, float32(value))
+	case tensor.Float64:
+		return backend.MulScalar(t, value)
+	default:
+		panic(fmt.Sprintf("mulScalarTyped: unsupported dtype %s", t.DType()))
+	}
+}
+
 // reduceBroadcast reduces a gradient tensor to match the target shape.
 // This is necessary when broadcasting was used in the forward pass.
 //
@@ -81,197 +94,53 @@ func reduceBroadcast(grad *tensor.RawTensor, targetShape tensor.Shape, backend t
 }
 
 // sumAll sums all elements of a tensor to a scalar.
-func sumAll(t *tensor.RawTensor, _ tensor.Backend) *tensor.RawTensor {
-	result, err := tensor.NewRaw(tensor.Shape{}, t.DType(), t.Device())
-	if err != nil {
-		panic(fmt.Sprintf("sumAll: failed to create result: %v", err))
-	}
-
-	switch t.DType() {
-	case tensor.Float32:
-		data := t.AsFloat32()
-		var sum float32
-		for _, v := range data {
-			sum += v
-		}
-		result.AsFloat32()[0] = sum
-
-	case tensor.Float64:
-		data := t.AsFloat64()
-		var sum float64
-		for _, v := range data {
-			sum += v
-		}
-		result.AsFloat64()[0] = sum
-
-	default:
-		panic(fmt.Sprintf("sumAll: unsupported dtype %s", t.DType()))
-	}
-
-	return result
+func sumAll(t *tensor.RawTensor, backend tensor.Backend) *tensor.RawTensor {
+	return backend.Sum(t)
 }
 
-// sumAlongDimension sums a tensor along the specified dimension.
-func sumAlongDimension(t *tensor.RawTensor, dim int, _ tensor.Backend) *tensor.RawTensor {
+// sumAlongDimension sums a tensor along the specified dimension, keeping the dim (size 1).
+func sumAlongDimension(t *tensor.RawTensor, dim int, backend tensor.Backend) *tensor.RawTensor {
 	shape := t.Shape()
 	if dim < 0 || dim >= len(shape) {
 		panic(fmt.Sprintf("sumAlongDimension: invalid dimension %d for shape %v", dim, shape))
 	}
 
-	// Calculate output shape (dimension at 'dim' becomes 1)
-	outShape := shape.Clone()
-	outShape[dim] = 1
-
-	result, err := tensor.NewRaw(outShape, t.DType(), t.Device())
-	if err != nil {
-		panic(fmt.Sprintf("sumAlongDimension: failed to create result: %v", err))
-	}
-
-	// Perform sum based on dtype
-	switch t.DType() {
-	case tensor.Float32:
-		sumFloat32AlongDimension(t.AsFloat32(), result.AsFloat32(), shape, dim)
-	case tensor.Float64:
-		sumFloat64AlongDimension(t.AsFloat64(), result.AsFloat64(), shape, dim)
-	default:
-		panic(fmt.Sprintf("sumAlongDimension: unsupported dtype %s", t.DType()))
-	}
-
-	return result
+	// SumDim with keepDim=true preserves the reduced dimension as size 1,
+	// matching the output shape contract that callers (reduceBroadcast) expect.
+	return backend.SumDim(t, dim, true)
 }
 
-// sumFloat32AlongDimension sums float32 data along a dimension.
-func sumFloat32AlongDimension(data, result []float32, shape tensor.Shape, dim int) {
-	// Initialize result to zero
-	for i := range result {
-		result[i] = 0
-	}
-
-	// Calculate strides
-	strides := shape.ComputeStrides()
-	dimStride := strides[dim]
-
-	// Iterate over all elements and accumulate into result
-	numElements := shape.NumElements()
-	for i := 0; i < numElements; i++ {
-		// Calculate which index in the reduced tensor this corresponds to
-		reducedIdx := 0
-		temp := i
-		for d := len(shape) - 1; d >= 0; d-- {
-			coord := temp / strides[d]
-			temp %= strides[d]
-
-			if d != dim {
-				// Include this coordinate in the reduced index
-				reducedStride := 1
-				for dd := d + 1; dd < len(shape); dd++ {
-					if dd != dim {
-						reducedStride *= shape[dd]
-					}
-				}
-				reducedIdx += coord * reducedStride
-			}
-		}
-
-		// Clamp reducedIdx to valid range
-		if reducedIdx >= len(result) {
-			reducedIdx = i / dimStride % (len(result))
-		}
-
-		result[reducedIdx] += data[i]
-	}
-}
-
-// sumFloat64AlongDimension sums float64 data along a dimension.
-func sumFloat64AlongDimension(data, result []float64, shape tensor.Shape, dim int) {
-	// Initialize result to zero
-	for i := range result {
-		result[i] = 0
-	}
-
-	// Calculate strides
-	strides := shape.ComputeStrides()
-	dimStride := strides[dim]
-
-	// Iterate over all elements and accumulate into result
-	numElements := shape.NumElements()
-	for i := 0; i < numElements; i++ {
-		// Calculate which index in the reduced tensor this corresponds to
-		reducedIdx := 0
-		temp := i
-		for d := len(shape) - 1; d >= 0; d-- {
-			coord := temp / strides[d]
-			temp %= strides[d]
-
-			if d != dim {
-				// Include this coordinate in the reduced index
-				reducedStride := 1
-				for dd := d + 1; dd < len(shape); dd++ {
-					if dd != dim {
-						reducedStride *= shape[dd]
-					}
-				}
-				reducedIdx += coord * reducedStride
-			}
-		}
-
-		// Clamp reducedIdx to valid range
-		if reducedIdx >= len(result) {
-			reducedIdx = i / dimStride % (len(result))
-		}
-
-		result[reducedIdx] += data[i]
-	}
-}
-
-// negateGradient returns -grad.
+// negateGradient returns -grad by multiplying by -1.
 func negateGradient(grad *tensor.RawTensor, backend tensor.Backend) *tensor.RawTensor {
-	// Create a tensor of zeros with same shape
-	zeros, err := tensor.NewRaw(grad.Shape(), grad.DType(), backend.Device())
-	if err != nil {
-		panic(fmt.Sprintf("negateGradient: failed to create zeros: %v", err))
-	}
-
-	// Initialize zeros
-	switch grad.DType() {
-	case tensor.Float32:
-		data := zeros.AsFloat32()
-		for i := range data {
-			data[i] = 0
-		}
-	case tensor.Float64:
-		data := zeros.AsFloat64()
-		for i := range data {
-			data[i] = 0
-		}
-	}
-
-	// Return 0 - grad
-	return backend.Sub(zeros, grad)
+	return mulScalarTyped(grad, -1.0, backend)
 }
 
 // createScalar creates a tensor filled with a scalar value.
+// Float32 uses tensor.FullRaw; Float64 fills directly to preserve precision.
 func createScalar(shape tensor.Shape, dtype tensor.DataType, value float64, device tensor.Device) *tensor.RawTensor {
-	result, err := tensor.NewRaw(shape, dtype, device)
-	if err != nil {
-		panic(fmt.Sprintf("createScalar: %v", err))
-	}
-
 	switch dtype {
 	case tensor.Float32:
-		data := result.AsFloat32()
-		val := float32(value)
-		for i := range data {
-			data[i] = val
+		result, err := tensor.FullRaw(shape, float32(value), dtype, device)
+		if err != nil {
+			panic(fmt.Sprintf("createScalar: %v", err))
 		}
+
+		return result
 	case tensor.Float64:
+		// FullRaw converts to float32 internally, losing precision.
+		// Allocate and fill directly to preserve float64 accuracy.
+		result, err := tensor.NewRaw(shape, dtype, device)
+		if err != nil {
+			panic(fmt.Sprintf("createScalar: %v", err))
+		}
+
 		data := result.AsFloat64()
 		for i := range data {
 			data[i] = value
 		}
+
+		return result
 	default:
 		panic(fmt.Sprintf("createScalar: unsupported dtype %s", dtype))
 	}
-
-	return result
 }

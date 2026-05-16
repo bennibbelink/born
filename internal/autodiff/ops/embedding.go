@@ -49,54 +49,29 @@ func (op *EmbeddingOp) Output() *tensor.RawTensor {
 //
 // Gradient computation:
 //   - For each position i in output, grad_output[i] flows back to weight[indices[i]]
-//   - Multiple indices pointing to the same embedding accumulate gradients
+//   - Multiple indices pointing to the same embedding accumulate (scatter-add)
 //
-// Algorithm:
-//  1. Create grad_weight tensor (same shape as weight) initialized to zeros
-//  2. For each index i:
-//     - Read index value: idx = indices[i]
-//     - Add grad_output[i] to grad_weight[idx]
-//  3. Return grad_weight
+// Uses backend.SelectAdd to delegate the scatter-add so that GPU backends can
+// accelerate it in the future without any change to this function.
 func (op *EmbeddingOp) Backward(gradOutput *tensor.RawTensor, backend tensor.Backend) []*tensor.RawTensor {
 	weightShape := op.weight.Shape()
-	numEmbeddings := weightShape[0]
-	embeddingDim := weightShape[1]
+	embDim := weightShape[1]
 
-	// Create gradient for weight (initialized to zero)
-	gradWeight, err := tensor.NewRaw(weightShape, tensor.Float32, backend.Device())
+	// Flatten multi-dimensional inputs to 2D for SelectAdd.
+	// gradOutput: [B, S, D] or [N, D] → [N, D]
+	// indices:    [B, S] or [N]       → [N]
+	numIndices := op.indices.NumElements()
+	flatGrad := backend.Reshape(gradOutput, tensor.Shape{numIndices, embDim})
+	flatIdx := backend.Reshape(op.indices, tensor.Shape{numIndices})
+
+	// Zero-filled destination: same shape as the weight matrix [numEmbeddings, embDim].
+	gradWeight, err := tensor.NewRaw(weightShape, gradOutput.DType(), backend.Device())
 	if err != nil {
 		panic(err)
 	}
 
-	// Zero-initialize gradient
-	gradWeightData := gradWeight.AsFloat32()
-	for i := range gradWeightData {
-		gradWeightData[i] = 0
-	}
+	// Scatter-add: for each i, gradWeight[flatIdx[i], :] += flatGrad[i, :]
+	gradWeight = backend.SelectAdd(gradWeight, 0, flatIdx, flatGrad)
 
-	// Scatter-add gradients to weight rows
-	indicesData := op.indices.AsInt32()
-	gradOutputData := gradOutput.AsFloat32()
-
-	numIndices := op.indices.NumElements()
-
-	for i := 0; i < numIndices; i++ {
-		idx := int(indicesData[i])
-
-		// Validate index
-		if idx < 0 || idx >= numEmbeddings {
-			panic("embedding backward: index out of bounds")
-		}
-
-		// Accumulate gradient for this embedding
-		gradOutOffset := i * embeddingDim
-		gradWeightOffset := idx * embeddingDim
-
-		for j := 0; j < embeddingDim; j++ {
-			gradWeightData[gradWeightOffset+j] += gradOutputData[gradOutOffset+j]
-		}
-	}
-
-	// Return gradient for weight (indices don't need gradient)
 	return []*tensor.RawTensor{gradWeight}
 }

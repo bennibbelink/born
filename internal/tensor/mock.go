@@ -1485,6 +1485,199 @@ func (m *MockBackend) anyToFloat64(v any) float64 {
 	}
 }
 
+// SelectAdd performs a scatter-add along the specified dimension (naive implementation).
+//
+// For each i: result[indices[i], ...] += src[i, ...] (at the given dim).
+// Returns a new tensor; dest is not modified.
+func (m *MockBackend) SelectAdd(dest *RawTensor, dim int, indices, src *RawTensor) *RawTensor {
+	if indices.DType() != Int32 {
+		panic(fmt.Sprintf("selectadd: indices must be int32, got %s", indices.DType()))
+	}
+
+	destShape := dest.Shape()
+	srcShape := src.Shape()
+	ndim := len(destShape)
+
+	if dim < 0 {
+		dim += ndim
+	}
+	if dim < 0 || dim >= ndim {
+		panic(fmt.Sprintf("selectadd: dim %d out of range for %dD tensor", dim, ndim))
+	}
+	if len(indices.Shape()) != 1 {
+		panic(fmt.Sprintf("selectadd: indices must be 1-D, got shape %v", indices.Shape()))
+	}
+
+	numIndices := indices.Shape()[0]
+
+	if len(srcShape) != ndim {
+		panic(fmt.Sprintf("selectadd: src rank %d != dest rank %d", len(srcShape), ndim))
+	}
+	if srcShape[dim] != numIndices {
+		panic(fmt.Sprintf("selectadd: src dim %d (%d) != len(indices) (%d)", dim, srcShape[dim], numIndices))
+	}
+	for d := 0; d < ndim; d++ {
+		if d == dim {
+			continue
+		}
+		if srcShape[d] != destShape[d] {
+			panic(fmt.Sprintf("selectadd: shape mismatch at dim %d: dest=%d src=%d", d, destShape[d], srcShape[d]))
+		}
+	}
+
+	// Clone dest.
+	result, err := NewRaw(destShape, dest.DType(), m.Device())
+	if err != nil {
+		panic(err)
+	}
+	copy(result.Data(), dest.Data())
+
+	idxData := indices.AsInt32()
+	destData := m.toFloat64Slice(dest)
+	srcData := m.toFloat64Slice(src)
+	resultData := m.toFloat64Slice(result)
+	// Initialize from dest (already copied via result.Data(), but toFloat64Slice
+	// returns a fresh slice — so copy from destData).
+	copy(resultData, destData)
+
+	dstStrides := destShape.ComputeStrides()
+	srcStrides := srcShape.ComputeStrides()
+	innerSize := srcShape.NumElements() / srcShape[dim]
+	srcDimStride := srcStrides[dim]
+	dstDimStride := dstStrides[dim]
+
+	for i := 0; i < numIndices; i++ {
+		idx := int(idxData[i])
+		if idx < 0 || idx >= destShape[dim] {
+			panic(fmt.Sprintf("selectadd: index %d out of bounds [0, %d)", idx, destShape[dim]))
+		}
+
+		for j := 0; j < innerSize; j++ {
+			// Compute flat-index offset for non-scatter dimensions.
+			nonDimFlat := 0
+			rem := j
+			for d := 0; d < ndim; d++ {
+				if d == dim {
+					continue
+				}
+				nonDimStride := 1
+				for dd := d + 1; dd < ndim; dd++ {
+					if dd != dim {
+						nonDimStride *= srcShape[dd]
+					}
+				}
+				coord := rem / nonDimStride
+				rem %= nonDimStride
+				nonDimFlat += coord * dstStrides[d]
+			}
+
+			srcFlat := i*srcDimStride + nonDimFlat
+			dstFlat := idx*dstDimStride + nonDimFlat
+			resultData[dstFlat] += srcData[srcFlat]
+		}
+	}
+
+	m.fromFloat64Slice(resultData, result)
+	return result
+}
+
+// ScatterAdd performs a general scatter-add matching Gather backward semantics.
+//
+// For each element in src (same shape as indices), accumulates into result along dim
+// at the position given by the corresponding index value. Follows Burn's float_scatter_add.
+//
+// Returns a new tensor with the same shape as dest. dest is not modified.
+func (m *MockBackend) ScatterAdd(dest *RawTensor, dim int, indices, src *RawTensor) *RawTensor {
+	if indices.DType() != Int32 {
+		panic(fmt.Sprintf("scatteradd: indices must be int32, got %s", indices.DType()))
+	}
+
+	destShape := dest.Shape()
+	srcShape := src.Shape()
+	indexShape := indices.Shape()
+	ndim := len(destShape)
+
+	if dim < 0 {
+		dim += ndim
+	}
+	if dim < 0 || dim >= ndim {
+		panic(fmt.Sprintf("scatteradd: dim %d out of range for %dD tensor", dim, ndim))
+	}
+
+	if len(indexShape) != len(srcShape) {
+		panic(fmt.Sprintf("scatteradd: indices rank %d != src rank %d", len(indexShape), len(srcShape)))
+	}
+	for d := range indexShape {
+		if indexShape[d] != srcShape[d] {
+			panic(fmt.Sprintf("scatteradd: indices shape %v != src shape %v", indexShape, srcShape))
+		}
+	}
+
+	if len(srcShape) != ndim {
+		panic(fmt.Sprintf("scatteradd: src rank %d != dest rank %d", len(srcShape), ndim))
+	}
+	for d := 0; d < ndim; d++ {
+		if d == dim {
+			continue
+		}
+		if srcShape[d] != destShape[d] {
+			panic(fmt.Sprintf("scatteradd: shape mismatch at dim %d: dest=%d src=%d", d, destShape[d], srcShape[d]))
+		}
+	}
+
+	// Clone dest.
+	result, err := NewRaw(destShape, dest.DType(), m.Device())
+	if err != nil {
+		panic(err)
+	}
+	copy(result.Data(), dest.Data())
+
+	idxData := indices.AsInt32()
+	destData := m.toFloat64Slice(dest)
+	srcData := m.toFloat64Slice(src)
+	resultData := m.toFloat64Slice(result)
+	copy(resultData, destData)
+
+	srcStrides := srcShape.ComputeStrides()
+	dstStrides := destShape.ComputeStrides()
+	indexStrides := indexShape.ComputeStrides()
+	numElements := src.NumElements()
+
+	for i := 0; i < numElements; i++ {
+		// Decompose flat index into multi-dimensional coordinates.
+		rem := i
+		coords := make([]int, ndim)
+		for d := 0; d < ndim; d++ {
+			coords[d] = rem / srcStrides[d]
+			rem %= srcStrides[d]
+		}
+
+		// Compute index into the indices tensor.
+		indexIdx := 0
+		for d := 0; d < ndim; d++ {
+			indexIdx += coords[d] * indexStrides[d]
+		}
+		idx := int(idxData[indexIdx])
+		if idx < 0 || idx >= destShape[dim] {
+			panic(fmt.Sprintf("scatteradd: index %d out of bounds [0, %d)", idx, destShape[dim]))
+		}
+
+		// Compute destination flat index.
+		dstIdx := 0
+		for d := 0; d < ndim; d++ {
+			if d == dim {
+				dstIdx += idx * dstStrides[d]
+			} else {
+				dstIdx += coords[d] * dstStrides[d]
+			}
+		}
+		resultData[dstIdx] += srcData[i]
+	}
+
+	m.fromFloat64Slice(resultData, result)
+	return result
+}
+
 // Conv2DInputBackward computes gradient w.r.t. input for Conv2D.
 // Stub implementation for MockBackend (test-only).
 func (m *MockBackend) Conv2DInputBackward(_, _, _ *RawTensor, _, _ int) *RawTensor {

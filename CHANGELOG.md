@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-05-16
+
+### Added
+
+- `SelectAdd` backend operation — scatter-add with 1-D indices (Embedding backward)
+  - CPU: all dtypes with flat-index computation, 7 tests
+  - WebGPU: CPU-data fallback (f32 atomics not in WGSL core spec)
+- `ScatterAdd` backend operation — scatter-add with N-D indices (Gather backward)
+  - CPU: all dtypes, validates shapes and index bounds
+  - WebGPU: CPU-data fallback
+- `MulScalarOp`, `AddScalarOp`, `SubScalarOp`, `DivScalarOp` autodiff operations
+  - All four scalar ops now record on the gradient tape
+  - Previously scalar ops were proxy-only — gradients did not flow through them
+
+### Fixed
+
+- **Tokenizer**: HuggingFace tokenizer now applies normalizer from tokenizer.json
+  - SentencePiece models (LLaMA, Mistral) require Prepend+Replace normalizer to map spaces to `▁` (U+2581)
+  - Without normalization, every token was wrong ("The" → ID 1576 instead of "▁The" → ID 450)
+  - Supported normalizers: Sequence, Prepend, Replace, Lowercase, Strip
+  - 13 new tests for normalizer parsing and word splitting
+- **Autodiff**: Scalar ops (MulScalar, AddScalar, SubScalar, DivScalar) not recorded on gradient tape
+  - Embedding weights received zero gradients when scaled by `embedScale * tokenEmbedding`
+  - All models using `MulScalar` in forward pass had broken gradient flow
+
+### Changed
+
+- **Autodiff backward ops**: Migrated 7 ops from CPU-fallback to forward composition ([ADR-009](docs/dev/ADR-009-backward-ops-composition.md))
+  - SiLU, Log, ReLU, CrossEntropy, MeanDim, Embedding, Gather backward now use backend ops only
+  - Tensors never leave the GPU during backward pass (eliminates GPU→CPU readback)
+  - Helper functions (`sumAll`, `sumAlongDimension`, `negateGradient`) now delegate to backend
+  - Follows Burn (Rust) reference architecture: all gradients via forward ops composition
+  - Net -835 lines of CPU-only backward code replaced by backend-delegated operations
+
+## [0.8.1] - 2026-05-15
+
 ### Added
 
 - `models/llama`: New LLaMA model package with GGUF loading and injectable attention

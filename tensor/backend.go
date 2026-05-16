@@ -99,9 +99,11 @@ type Backend interface {
 	Squeeze(x *RawTensor, dim int) *RawTensor     // Remove dimension of size 1.
 
 	// Indexing operations.
-	Gather(x *RawTensor, dim int, index *RawTensor) *RawTensor // Select elements along dim using index tensor.
-	Where(condition, x, y *RawTensor) *RawTensor               // Conditional element selection.
-	Embedding(weight, indices *RawTensor) *RawTensor           // Lookup embeddings by indices.
+	Gather(x *RawTensor, dim int, index *RawTensor) *RawTensor                          // Select elements along dim using index tensor.
+	Where(condition, x, y *RawTensor) *RawTensor                                        // Conditional element selection.
+	Embedding(weight, indices *RawTensor) *RawTensor                                    // Lookup embeddings by indices.
+	SelectAdd(dest *RawTensor, dim int, indices *RawTensor, src *RawTensor) *RawTensor  // Scatter-add (1-D indices): dest[indices[i], ...] += src[i, ...].
+	ScatterAdd(dest *RawTensor, dim int, indices *RawTensor, src *RawTensor) *RawTensor // Scatter-add (N-D indices, Gather backward): dest[..., indices[...], ...] += src[...].
 
 	// Shape operations (broadcast).
 	Expand(x *RawTensor, shape Shape) *RawTensor // Broadcast to shape.

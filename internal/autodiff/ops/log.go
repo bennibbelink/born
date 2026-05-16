@@ -40,47 +40,18 @@ func (op *LogOp) Output() *tensor.RawTensor {
 	return op.output
 }
 
-// Backward computes the gradient with respect to input.
+// Backward computes the gradient with respect to input using only backend ops.
 //
 // Gradient formula:
 //
-//	∂L/∂input[i] = ∂L/∂output[i] * (1 / input[i])
+//	∂L/∂input = ∂L/∂output / input
 //
 // Note: This assumes input > 0 (log is only defined for positive values).
-// In practice, a small epsilon (e.g., 1e-8) is often added for numerical stability.
-func (op *LogOp) Backward(outputGrad *tensor.RawTensor, _ tensor.Backend) []*tensor.RawTensor {
-	// Create gradient tensor with same shape as input
-	inputGrad, err := tensor.NewRaw(op.input.Shape(), op.input.DType(), op.input.Device())
-	if err != nil {
-		panic(err)
-	}
+func (op *LogOp) Backward(outputGrad *tensor.RawTensor, backend tensor.Backend) []*tensor.RawTensor {
+	// grad_input = grad_output / input — single backend op, no data leaves the device.
+	gradInput := backend.Div(outputGrad, op.input)
 
-	// Get data slices based on dtype
-	switch op.input.DType() {
-	case tensor.Float32:
-		inputData := op.input.AsFloat32()
-		gradData := inputGrad.AsFloat32()
-		outGradData := outputGrad.AsFloat32()
-
-		// Compute gradient: grad_input = grad_output / input
-		for i := range inputData {
-			gradData[i] = outGradData[i] / inputData[i]
-		}
-
-	case tensor.Float64:
-		inputData := op.input.AsFloat64()
-		gradData := inputGrad.AsFloat64()
-		outGradData := outputGrad.AsFloat64()
-
-		for i := range inputData {
-			gradData[i] = outGradData[i] / inputData[i]
-		}
-
-	default:
-		panic("LogOp: backward only supports float32 and float64")
-	}
-
-	return []*tensor.RawTensor{inputGrad}
+	return []*tensor.RawTensor{gradInput}
 }
 
 // LogWithEpsilonOp represents log with numerical stability epsilon.
@@ -116,37 +87,23 @@ func (op *LogWithEpsilonOp) Output() *tensor.RawTensor {
 }
 
 // Backward computes gradient: ∂L/∂input = ∂L/∂output / (input + epsilon).
-func (op *LogWithEpsilonOp) Backward(outputGrad *tensor.RawTensor, _ tensor.Backend) []*tensor.RawTensor {
-	inputGrad, err := tensor.NewRaw(op.input.Shape(), op.input.DType(), op.input.Device())
-	if err != nil {
-		panic(err)
-	}
-
+func (op *LogWithEpsilonOp) Backward(outputGrad *tensor.RawTensor, backend tensor.Backend) []*tensor.RawTensor {
+	// epsilon must be typed to match the tensor's dtype — backend.AddScalar uses a strict
+	// type assertion (scalar.(float32) or scalar.(float64)).
+	var eps any
 	switch op.input.DType() {
 	case tensor.Float32:
-		inputData := op.input.AsFloat32()
-		gradData := inputGrad.AsFloat32()
-		outGradData := outputGrad.AsFloat32()
-		eps := float32(op.epsilon)
-
-		for i := range inputData {
-			gradData[i] = outGradData[i] / (inputData[i] + eps)
-		}
-
-	case tensor.Float64:
-		inputData := op.input.AsFloat64()
-		gradData := inputGrad.AsFloat64()
-		outGradData := outputGrad.AsFloat64()
-
-		for i := range inputData {
-			gradData[i] = outGradData[i] / (inputData[i] + op.epsilon)
-		}
-
-	default:
-		panic("LogWithEpsilonOp: backward only supports float32 and float64")
+		eps = float32(op.epsilon)
+	default: // Float64
+		eps = op.epsilon
 	}
 
-	return []*tensor.RawTensor{inputGrad}
+	// shifted = input + epsilon (stays on device)
+	shifted := backend.AddScalar(op.input, eps)
+	// grad_input = grad_output / (input + epsilon)
+	gradInput := backend.Div(outputGrad, shifted)
+
+	return []*tensor.RawTensor{gradInput}
 }
 
 // Exp computes element-wise exponential (helper for softmax).

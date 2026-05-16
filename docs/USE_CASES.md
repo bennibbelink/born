@@ -1,7 +1,7 @@
 # Born ML Framework - Use Cases Guide
 
 **Status**: Living Document
-**Last Updated**: 2025-11-30
+**Last Updated**: 2026-05-16
 
 ---
 
@@ -498,14 +498,15 @@ model := born.LoadONNX("model.onnx")
 
 ### Q: Is Born stable enough?
 
-**A:** Current status (v0.8.1):
+**A:** Current status (v0.8.2):
 - ✅ Core API stable (tensor, nn, optim, autodiff)
 - ✅ Production-tested (MNIST 97%+, GPU 123x speedup)
 - ✅ LLM inference: LLaMA via `models/llama.LoadGGUF()`, verified on TinyLlama 1.1B Q8_0 and Q4_K_M
+- ✅ GPU training: backward ops run on GPU without CPU readback (Burn-aligned architecture)
 - ✅ ONNX import (49 operators)
 - ⚠️ API may evolve before v1.0
 
-**Recommendation:** Ready for production inference workloads.
+**Recommendation:** Ready for production inference and GPU training workloads.
 
 ---
 

@@ -14,6 +14,7 @@ type BPETokenizer struct {
 	vocab         map[string]int32 // token -> ID
 	merges        []pair           // BPE merge rules
 	reverseVocab  map[int32]string // ID -> token
+	normalizer    Normalizer       // text normalizer (from tokenizer.json)
 	bosToken      int32
 	eosToken      int32
 	padToken      int32
@@ -74,8 +75,14 @@ func (b *BPETokenizer) Encode(text string) ([]int32, error) {
 		return []int32{}, nil
 	}
 
-	// Split text into words (simplified - real BPE uses regex patterns).
-	words := strings.Fields(text)
+	if b.normalizer != nil {
+		text = b.normalizer.Normalize(text)
+	}
+
+	// Split text into words.
+	// After SentencePiece normalization, spaces become '▁' (U+2581).
+	// Split on '▁' boundaries, keeping '▁' at the start of each word.
+	words := splitWords(text)
 	var tokens []int32
 
 	for _, word := range words {
@@ -189,7 +196,7 @@ func (b *BPETokenizer) IsSpecialToken(token int32) bool {
 	return b.specialTokens[token]
 }
 
-// HuggingFaceTokenizerConfig represents a subset of tokenizer.json structure.
+// HuggingFaceTokenizerConfig represents the tokenizer.json structure.
 type HuggingFaceTokenizerConfig struct {
 	Model struct {
 		Vocab  map[string]int `json:"vocab"`
@@ -200,6 +207,7 @@ type HuggingFaceTokenizerConfig struct {
 		Content string `json:"content"`
 		Special bool   `json:"special"`
 	} `json:"added_tokens"`
+	Normalizer json.RawMessage `json:"normalizer"`
 }
 
 // LoadBPEFromHuggingFace loads a BPE tokenizer from tokenizer.json.
@@ -233,13 +241,30 @@ func LoadBPEFromHuggingFace(path string) (*BPETokenizer, error) {
 
 	tokenizer := NewBPETokenizer(vocab, merges)
 
-	// Configure special tokens from added_tokens.
-	for _, addedToken := range config.AddedTokens {
+	// Parse normalizer (Prepend, Replace, Sequence, etc.).
+	if len(config.Normalizer) > 0 {
+		norm, err := parseNormalizer(config.Normalizer)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse normalizer: %w", err)
+		}
+		tokenizer.normalizer = norm
+	}
+
+	configureSpecialTokens(tokenizer, config.AddedTokens)
+	return tokenizer, nil
+}
+
+// configureSpecialTokens identifies BOS/EOS/PAD/UNK from the added_tokens list.
+func configureSpecialTokens(tokenizer *BPETokenizer, addedTokens []struct {
+	ID      int    `json:"id"`
+	Content string `json:"content"`
+	Special bool   `json:"special"`
+}) {
+	for _, addedToken := range addedTokens {
 		id := int32(addedToken.ID) //nolint:gosec // G115: integer overflow conversion int -> int32
 		if addedToken.Special {
 			tokenizer.specialTokens[id] = true
 
-			// Try to identify standard special tokens.
 			content := strings.ToLower(addedToken.Content)
 			switch {
 			case strings.Contains(content, "bos") || content == specialTokenBOS:
@@ -253,8 +278,33 @@ func LoadBPEFromHuggingFace(path string) (*BPETokenizer, error) {
 			}
 		}
 	}
+}
 
-	return tokenizer, nil
+// splitWords splits text into words for BPE tokenization.
+//
+// For SentencePiece-normalized text (spaces replaced with '▁'), splits on '▁'
+// boundaries while keeping '▁' at the start of each word.
+// For regular text, falls back to whitespace splitting.
+func splitWords(text string) []string {
+	const sentencePieceSpace = '▁' // U+2581
+
+	if strings.ContainsRune(text, sentencePieceSpace) {
+		parts := strings.Split(text, string(sentencePieceSpace))
+		var words []string
+		for i, part := range parts {
+			if part == "" {
+				continue
+			}
+			if i > 0 {
+				words = append(words, string(sentencePieceSpace)+part)
+			} else {
+				words = append(words, part)
+			}
+		}
+		return words
+	}
+
+	return strings.Fields(text)
 }
 
 // ExampleBPEVocab creates a minimal BPE tokenizer for testing.

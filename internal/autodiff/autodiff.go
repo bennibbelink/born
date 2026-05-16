@@ -734,24 +734,40 @@ func (b *AutodiffBackend[B]) NoGrad(fn func()) {
 	fn()
 }
 
-// MulScalar multiplies tensor elements by a scalar (autodiff proxy).
+// MulScalar multiplies tensor elements by a scalar and records the operation.
 func (b *AutodiffBackend[B]) MulScalar(x *tensor.RawTensor, scalar any) *tensor.RawTensor {
-	return b.inner.MulScalar(x, scalar)
+	result := b.inner.MulScalar(x, scalar)
+	if b.tape.IsRecording() {
+		b.tape.Record(ops.NewMulScalarOp(x, result, scalar))
+	}
+	return result
 }
 
-// AddScalar adds a scalar to tensor elements (autodiff proxy).
+// AddScalar adds a scalar to tensor elements and records the operation.
 func (b *AutodiffBackend[B]) AddScalar(x *tensor.RawTensor, scalar any) *tensor.RawTensor {
-	return b.inner.AddScalar(x, scalar)
+	result := b.inner.AddScalar(x, scalar)
+	if b.tape.IsRecording() {
+		b.tape.Record(ops.NewAddScalarOp(x, result))
+	}
+	return result
 }
 
-// SubScalar subtracts a scalar from tensor elements (autodiff proxy).
+// SubScalar subtracts a scalar from tensor elements and records the operation.
 func (b *AutodiffBackend[B]) SubScalar(x *tensor.RawTensor, scalar any) *tensor.RawTensor {
-	return b.inner.SubScalar(x, scalar)
+	result := b.inner.SubScalar(x, scalar)
+	if b.tape.IsRecording() {
+		b.tape.Record(ops.NewSubScalarOp(x, result))
+	}
+	return result
 }
 
-// DivScalar divides tensor elements by a scalar (autodiff proxy).
+// DivScalar divides tensor elements by a scalar and records the operation.
 func (b *AutodiffBackend[B]) DivScalar(x *tensor.RawTensor, scalar any) *tensor.RawTensor {
-	return b.inner.DivScalar(x, scalar)
+	result := b.inner.DivScalar(x, scalar)
+	if b.tape.IsRecording() {
+		b.tape.Record(ops.NewDivScalarOp(x, result, scalar))
+	}
+	return result
 }
 
 // Greater performs element-wise greater-than comparison (autodiff proxy).
@@ -1027,6 +1043,26 @@ func (b *AutodiffBackend[B]) Embedding(weight, indices *tensor.RawTensor) *tenso
 	}
 
 	return result
+}
+
+// SelectAdd performs a scatter-add along the specified dimension (autodiff proxy).
+//
+// SelectAdd is used only inside backward passes (e.g., Embedding backward) and
+// does not need to be recorded on the tape: it computes gradients, not forward
+// values. Delegating directly to the inner backend mirrors the pattern used for
+// Conv2DInputBackward and MaxPool2DBackward.
+func (b *AutodiffBackend[B]) SelectAdd(dest *tensor.RawTensor, dim int, indices, src *tensor.RawTensor) *tensor.RawTensor {
+	return b.inner.SelectAdd(dest, dim, indices, src)
+}
+
+// ScatterAdd performs a general scatter-add matching Gather backward semantics (autodiff proxy).
+//
+// ScatterAdd is used only inside backward passes (e.g., Gather backward) and
+// does not need to be recorded on the tape: it computes gradients, not forward
+// values. Delegating directly to the inner backend mirrors the pattern used for
+// SelectAdd and Conv2DInputBackward.
+func (b *AutodiffBackend[B]) ScatterAdd(dest *tensor.RawTensor, dim int, indices, src *tensor.RawTensor) *tensor.RawTensor {
+	return b.inner.ScatterAdd(dest, dim, indices, src)
 }
 
 // Conv2DInputBackward computes gradient w.r.t. input for Conv2D.

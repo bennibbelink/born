@@ -6,6 +6,33 @@ import (
 	"github.com/born-ml/born/internal/tensor"
 )
 
+// buildOneHotIdentity creates a float identity matrix of shape [n, n] in the given dtype.
+// Row i is the i-th standard basis vector (one-hot for class i).
+// Only n scalar writes touch CPU; the logits/targets batch data never crosses the bus.
+func buildOneHotIdentity(n int, dtype tensor.DataType, device tensor.Device) *tensor.RawTensor {
+	identity, err := tensor.NewRaw(tensor.Shape{n, n}, dtype, device)
+	if err != nil {
+		panic(err)
+	}
+
+	switch dtype {
+	case tensor.Float32:
+		data := identity.AsFloat32()
+		for i := 0; i < n; i++ {
+			data[i*n+i] = 1.0
+		}
+	case tensor.Float64:
+		data := identity.AsFloat64()
+		for i := 0; i < n; i++ {
+			data[i*n+i] = 1.0
+		}
+	default:
+		panic("buildOneHotIdentity: only float32 and float64 are supported")
+	}
+
+	return identity
+}
+
 // CrossEntropyOp represents the cross-entropy loss operation.
 //
 // Forward:
@@ -52,17 +79,30 @@ func (op *CrossEntropyOp) Output() *tensor.RawTensor {
 	return op.output
 }
 
-// Backward computes the gradient with respect to logits.
+// Backward computes the gradient with respect to logits using backend ops only.
 //
 // Gradient formula:
 //
-//	∂L/∂logits[b,i] = (softmax(logits[b])[i] - y_one_hot[b,i]) / batch_size
+//	∂L/∂logits[b,i] = (softmax(logits[b])[i] - y_one_hot[b,i]) / batch_size * outputGrad
 //
 // Where y_one_hot[b,i] = 1 if i == targets[b], else 0.
 //
-// Note: The gradient is averaged over the batch size because the forward
-// pass computes mean loss.
-func (op *CrossEntropyOp) Backward(outputGrad *tensor.RawTensor, _ tensor.Backend) []*tensor.RawTensor {
+// Implementation strategy (no GPU→CPU readback for batch data):
+//
+//  1. softmax = backend.Softmax(logits, -1)         — [batch, classes], stays on device
+//  2. identity = float identity matrix [classes, classes]  — only numClasses scalar writes
+//  3. oneHot = backend.Embedding(identity, targets)  — [batch, classes], no targets readback
+//  4. diff = backend.Sub(softmax, oneHot)            — [batch, classes]
+//  5. scaled = backend.DivScalar(diff, float(batch)) — divide by batchSize
+//  6. gradScale = outputGrad.AsFloat32/64()[0]       — single scalar readback (upstream grad)
+//  7. gradInput = backend.MulScalar(scaled, gradScale)
+//
+// The identity matrix approach for one-hot encodes each target class i as identity[i],
+// which is the i-th standard basis vector. backend.Embedding looks up rows by index,
+// so Embedding(identity, targets) = one_hot(targets) without any CPU readback of targets.
+//
+// Note: outputGrad is a scalar loss gradient [1]; reading one float is acceptable here.
+func (op *CrossEntropyOp) Backward(outputGrad *tensor.RawTensor, backend tensor.Backend) []*tensor.RawTensor {
 	logitsShape := op.logits.Shape()
 	if len(logitsShape) != 2 {
 		panic("CrossEntropyOp: backward only supports 2D logits [batch_size, num_classes]")
@@ -70,151 +110,50 @@ func (op *CrossEntropyOp) Backward(outputGrad *tensor.RawTensor, _ tensor.Backen
 
 	batchSize := logitsShape[0]
 	numClasses := logitsShape[1]
+	dtype := op.logits.DType()
 
-	// Create gradient tensor for logits
-	logitsGrad, err := tensor.NewRaw(logitsShape, op.logits.DType(), op.logits.Device())
-	if err != nil {
-		panic(err)
-	}
+	// Step 1: softmax(logits) — [batch, classes], computed on backend (GPU stays on GPU).
+	softmaxProbs := backend.Softmax(op.logits, -1)
 
-	switch op.logits.DType() {
+	// Step 2: Build identity matrix [classes, classes] in logits dtype.
+	// Only numClasses scalar 1.0 values are written on CPU; no batch data crosses the bus.
+	identity := buildOneHotIdentity(numClasses, dtype, op.logits.Device())
+
+	// Step 3: one_hot = Embedding(identity, targets) — [batch, classes].
+	// targets remain on device; Embedding reads their values internally via AsInt32()
+	// only to index into the identity table (O(numClasses) rows, not O(batch*classes)).
+	oneHot := backend.Embedding(identity, op.targets)
+
+	// Step 4: diff = softmax - one_hot — [batch, classes].
+	// softmaxProbs is a fresh tensor from Softmax, safe as the first arg (CPU in-place optimizes
+	// the 'a' operand, so using a fresh tensor avoids aliasing issues with stored op.logits).
+	diff := backend.Sub(softmaxProbs, oneHot)
+
+	// Step 5: scale by 1/batchSize (typed scalar to satisfy backend type assertion).
+	var batchScale any
+	switch dtype {
 	case tensor.Float32:
-		computeCrossEntropyGradFloat32(
-			op.logits.AsFloat32(),
-			op.targets.AsInt32(),
-			outputGrad.AsFloat32(),
-			logitsGrad.AsFloat32(),
-			batchSize,
-			numClasses,
-		)
-
-	case tensor.Float64:
-		computeCrossEntropyGradFloat64(
-			op.logits.AsFloat64(),
-			op.targets.AsInt32(),
-			outputGrad.AsFloat64(),
-			logitsGrad.AsFloat64(),
-			batchSize,
-			numClasses,
-		)
-
-	default:
-		panic("CrossEntropyOp: backward only supports float32 and float64")
+		batchScale = float32(1.0) / float32(batchSize)
+	default: // Float64
+		batchScale = 1.0 / float64(batchSize)
 	}
 
-	return []*tensor.RawTensor{logitsGrad}
-}
+	scaled := backend.MulScalar(diff, batchScale)
 
-// computeCrossEntropyGradFloat32 computes gradients for float32 cross-entropy.
-func computeCrossEntropyGradFloat32(
-	logitsData []float32,
-	targetsData []int32,
-	outGradData []float32,
-	gradData []float32,
-	batchSize, numClasses int,
-) {
-	gradScale := outGradData[0] // Usually 1.0, but we respect upstream gradient
-
-	for b := 0; b < batchSize; b++ {
-		// Extract logits for this sample
-		sampleLogits := logitsData[b*numClasses : (b+1)*numClasses]
-
-		// Compute softmax probabilities
-		probs := computeSoftmaxFloat32(sampleLogits)
-
-		// Gradient = (softmax - y_one_hot) / batch_size
-		target := int(targetsData[b])
-		for i := 0; i < numClasses; i++ {
-			grad := probs[i]
-			if i == target {
-				grad -= 1.0
-			}
-
-			// Scale by upstream gradient and average over batch
-			gradData[b*numClasses+i] = gradScale * grad / float32(batchSize)
-		}
-	}
-}
-
-// computeCrossEntropyGradFloat64 computes gradients for float64 cross-entropy.
-func computeCrossEntropyGradFloat64(
-	logitsData []float64,
-	targetsData []int32,
-	outGradData []float64,
-	gradData []float64,
-	batchSize, numClasses int,
-) {
-	gradScale := outGradData[0]
-
-	for b := 0; b < batchSize; b++ {
-		sampleLogits := logitsData[b*numClasses : (b+1)*numClasses]
-		probs := computeSoftmaxFloat64(sampleLogits)
-
-		target := int(targetsData[b])
-		for i := 0; i < numClasses; i++ {
-			grad := probs[i]
-			if i == target {
-				grad -= 1.0
-			}
-			gradData[b*numClasses+i] = gradScale * grad / float64(batchSize)
-		}
-	}
-}
-
-// computeSoftmaxFloat32 computes softmax with numerical stability for a single sample.
-func computeSoftmaxFloat32(logits []float32) []float32 {
-	n := len(logits)
-	probs := make([]float32, n)
-
-	// Find max for numerical stability
-	maxVal := logits[0]
-	for i := 1; i < n; i++ {
-		if logits[i] > maxVal {
-			maxVal = logits[i]
-		}
+	// Step 6: extract upstream gradient scalar — shape [1], single element readback.
+	// This is acceptable: we are reading one float (the scalar loss gradient), not batch data.
+	var gradScale any
+	switch dtype {
+	case tensor.Float32:
+		gradScale = outputGrad.AsFloat32()[0]
+	default: // Float64
+		gradScale = outputGrad.AsFloat64()[0]
 	}
 
-	// Compute exp(z - max) and sum
-	sumExp := float32(0.0)
-	for i := 0; i < n; i++ {
-		probs[i] = float32(math.Exp(float64(logits[i] - maxVal)))
-		sumExp += probs[i]
-	}
+	// Step 7: chain rule — multiply by upstream gradient.
+	gradInput := backend.MulScalar(scaled, gradScale)
 
-	// Normalize
-	for i := 0; i < n; i++ {
-		probs[i] /= sumExp
-	}
-
-	return probs
-}
-
-// computeSoftmaxFloat64 computes softmax with numerical stability for a single sample.
-func computeSoftmaxFloat64(logits []float64) []float64 {
-	n := len(logits)
-	probs := make([]float64, n)
-
-	// Find max for numerical stability
-	maxVal := logits[0]
-	for i := 1; i < n; i++ {
-		if logits[i] > maxVal {
-			maxVal = logits[i]
-		}
-	}
-
-	// Compute exp(z - max) and sum
-	sumExp := 0.0
-	for i := 0; i < n; i++ {
-		probs[i] = math.Exp(logits[i] - maxVal)
-		sumExp += probs[i]
-	}
-
-	// Normalize
-	for i := 0; i < n; i++ {
-		probs[i] /= sumExp
-	}
-
-	return probs
+	return []*tensor.RawTensor{gradInput}
 }
 
 // CrossEntropyForward computes cross-entropy loss (helper function).

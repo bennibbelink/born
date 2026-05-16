@@ -1055,6 +1055,16 @@ func (b *AutodiffBackend[B]) SelectAdd(dest *tensor.RawTensor, dim int, indices,
 	return b.inner.SelectAdd(dest, dim, indices, src)
 }
 
+// ScatterAdd performs a general scatter-add matching Gather backward semantics (autodiff proxy).
+//
+// ScatterAdd is used only inside backward passes (e.g., Gather backward) and
+// does not need to be recorded on the tape: it computes gradients, not forward
+// values. Delegating directly to the inner backend mirrors the pattern used for
+// SelectAdd and Conv2DInputBackward.
+func (b *AutodiffBackend[B]) ScatterAdd(dest *tensor.RawTensor, dim int, indices, src *tensor.RawTensor) *tensor.RawTensor {
+	return b.inner.ScatterAdd(dest, dim, indices, src)
+}
+
 // Conv2DInputBackward computes gradient w.r.t. input for Conv2D.
 // Delegates to inner backend (no recording needed - used during backward pass only).
 func (b *AutodiffBackend[B]) Conv2DInputBackward(input, kernel, grad *tensor.RawTensor, stride, padding int) *tensor.RawTensor {

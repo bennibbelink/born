@@ -97,7 +97,22 @@ type Backend interface {
 	//
 	// Returns a new tensor (dest is not modified in-place).
 	// Semantics follow Burn's float_select_add: scatter-add along the given dimension.
+	// indices must be 1-D.
 	SelectAdd(dest *RawTensor, dim int, indices *RawTensor, src *RawTensor) *RawTensor
+
+	// ScatterAdd performs a general scatter-add matching the semantics of Gather backward.
+	//
+	// For each flat position i in indices (same shape as src):
+	//
+	//	result[..., indices[...], ...] += src[...]   (the replaced axis is dim)
+	//
+	// This is the inverse of Gather: Gather selects elements, ScatterAdd accumulates
+	// gradients back. indices has the same shape as src, with each element specifying
+	// the position in dest along dim. Semantics follow Burn's float_scatter_add.
+	//
+	// Returns a new tensor with the same shape as dest. dest is not modified.
+	// indices must have dtype int32.
+	ScatterAdd(dest *RawTensor, dim int, indices *RawTensor, src *RawTensor) *RawTensor
 
 	// Shape operations (broadcast)
 	Expand(x *RawTensor, shape Shape) *RawTensor // broadcast to shape

@@ -734,24 +734,40 @@ func (b *AutodiffBackend[B]) NoGrad(fn func()) {
 	fn()
 }
 
-// MulScalar multiplies tensor elements by a scalar (autodiff proxy).
+// MulScalar multiplies tensor elements by a scalar and records the operation.
 func (b *AutodiffBackend[B]) MulScalar(x *tensor.RawTensor, scalar any) *tensor.RawTensor {
-	return b.inner.MulScalar(x, scalar)
+	result := b.inner.MulScalar(x, scalar)
+	if b.tape.IsRecording() {
+		b.tape.Record(ops.NewMulScalarOp(x, result, scalar))
+	}
+	return result
 }
 
-// AddScalar adds a scalar to tensor elements (autodiff proxy).
+// AddScalar adds a scalar to tensor elements and records the operation.
 func (b *AutodiffBackend[B]) AddScalar(x *tensor.RawTensor, scalar any) *tensor.RawTensor {
-	return b.inner.AddScalar(x, scalar)
+	result := b.inner.AddScalar(x, scalar)
+	if b.tape.IsRecording() {
+		b.tape.Record(ops.NewAddScalarOp(x, result))
+	}
+	return result
 }
 
-// SubScalar subtracts a scalar from tensor elements (autodiff proxy).
+// SubScalar subtracts a scalar from tensor elements and records the operation.
 func (b *AutodiffBackend[B]) SubScalar(x *tensor.RawTensor, scalar any) *tensor.RawTensor {
-	return b.inner.SubScalar(x, scalar)
+	result := b.inner.SubScalar(x, scalar)
+	if b.tape.IsRecording() {
+		b.tape.Record(ops.NewSubScalarOp(x, result))
+	}
+	return result
 }
 
-// DivScalar divides tensor elements by a scalar (autodiff proxy).
+// DivScalar divides tensor elements by a scalar and records the operation.
 func (b *AutodiffBackend[B]) DivScalar(x *tensor.RawTensor, scalar any) *tensor.RawTensor {
-	return b.inner.DivScalar(x, scalar)
+	result := b.inner.DivScalar(x, scalar)
+	if b.tape.IsRecording() {
+		b.tape.Record(ops.NewDivScalarOp(x, result, scalar))
+	}
+	return result
 }
 
 // Greater performs element-wise greater-than comparison (autodiff proxy).

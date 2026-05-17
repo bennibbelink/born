@@ -242,6 +242,12 @@ func (b *Backend) finishAndQueueLazy(
 // copyGPUBuffer creates a GPU-to-GPU copy without CPU round-trip.
 // This is critical for LazyMode performance - avoids GPU→CPU→GPU transfers.
 func (b *Backend) copyGPUBuffer(srcBuffer *wgpu.Buffer, size uint64) *wgpu.Buffer {
+	// Flush pending commands first — srcBuffer may be a staging buffer from a
+	// lazy op whose command buffer hasn't been submitted yet. Without this
+	// flush, CopyBufferToBuffer would read uninitialized staging data.
+	b.flushCommands()
+	b.device.Poll(wgpu.PollWait)
+
 	dstBuffer, err := b.device.CreateBuffer(&wgpu.BufferDescriptor{
 		Usage: gputypes.BufferUsageStorage | gputypes.BufferUsageCopySrc | gputypes.BufferUsageCopyDst,
 		Size:  size,

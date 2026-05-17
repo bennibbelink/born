@@ -3,7 +3,7 @@ name: Tests
 # Testing Strategy:
 # - Tests run on Linux, macOS, and Windows (cross-platform framework)
 # - Born ML is a cross-platform ML framework - must work everywhere
-# - Go 1.25+ required (matches go.mod requirement)
+# - Go 1.26+ required (matches go.mod requirement)
 #
 # Branch Strategy (Git Flow):
 # - feature/** branches: Development work
@@ -33,7 +33,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        go-version: ['1.25']  # Match go.mod requirement
+        go-version: ['1.26']  # Match go.mod requirement
 
     steps:
     - name: Checkout code
@@ -60,7 +60,7 @@ jobs:
       run: go test -short -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
     - name: Upload coverage to Codecov
-      if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
+      if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.26'
       uses: codecov/codecov-action@v5
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
@@ -82,7 +82,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.25'
+        go-version: '1.26'
         cache: true
 
     - name: Run golangci-lint
@@ -103,7 +103,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.25'
+        go-version: '1.26'
         cache: true
 
     - name: Check formatting
@@ -129,7 +129,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.25'
+        go-version: '1.26'
         cache: true
 
     - name: Build MNIST example
@@ -150,7 +150,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.25'
+        go-version: '1.26'
         cache: true
 
     - name: Build all tools
@@ -168,7 +168,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.25'
+        go-version: '1.26'
         cache: true
 
     - name: Run benchmarks

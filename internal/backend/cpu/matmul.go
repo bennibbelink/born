@@ -96,9 +96,15 @@ func matmulFloat32(c, a, b []float32, m, k, n int) {
 // matmulMicroKernelF32 accumulates the block product A[ii:iEnd, kk:kEnd] × B[kk:kEnd, jj:jEnd]
 // into C[ii:iEnd, jj:jEnd].
 //
-// Loop order i→k→j: aVal = a[i*k+kIdx] is hoisted out of the j-loop, and
-// b[kIdx*n+j] access is sequential (row-major), maximizing cache utilization.
+// When an AVX2 SIMD kernel is available (amd64, built with GOEXPERIMENT=simd),
+// simdMicroKernelF32 is non-nil and the work is delegated to avx2MicroKernelF32.
+// Otherwise the scalar i→k→j loop runs: aVal is hoisted out of the j-loop and
+// b[kIdx*n+j] access is sequential (row-major) to maximise cache utilisation.
 func matmulMicroKernelF32(c, a, b []float32, k, n, ii, iEnd, kk, kEnd, jj, jEnd int) {
+	if simdMicroKernelF32 != nil {
+		simdMicroKernelF32(c, a, b, k, n, ii, iEnd, kk, kEnd, jj, jEnd)
+		return
+	}
 	for i := ii; i < iEnd; i++ {
 		for kIdx := kk; kIdx < kEnd; kIdx++ {
 			aVal := a[i*k+kIdx]

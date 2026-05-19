@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-05-19
+
+### Fixed
+
+- **GPU batched dispatch**: auto-flush pending command buffers every 128 dispatches
+  - Prevents Windows TDR timeout (VK_ERROR_DEVICE_LOST) on integrated GPUs
+  - Before: eval passes with 13K+ dispatches accumulated without flush → GPU killed by OS
+  - After: 128 ops per Submit — safe for all GPUs while still 128x fewer Submits than pre-v0.9.0
+  - 3 auto-flush tests: many-ops-without-readback, pending-count-reset, threshold-sanity
+
 ## [0.9.0] - 2026-05-17
 
 ### Added

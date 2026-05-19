@@ -234,10 +234,24 @@ func (b *Backend) finishAndQueueLazy(
 		resultBufs: bufs,
 		bindGroups: res.bindGroups,
 	})
+	pendingCount := len(b.pending)
 	b.pendingMu.Unlock()
+
+	// Auto-flush to prevent GPU timeout (Windows TDR = 2s default).
+	// Without this, eval passes with 13K+ dispatches and no Data() readback
+	// accumulate all command buffers → single massive Submit → GPU timeout.
+	if pendingCount >= maxPendingBeforeFlush {
+		b.flushCommands()
+	}
 
 	return b.createLazyResult(stagingBuf, resultSize, shape, dtype)
 }
+
+// maxPendingBeforeFlush limits how many command buffers accumulate before
+// auto-flushing. Prevents Windows TDR timeout (default 2s) on iGPUs.
+// 128 dispatches ≈ 64ms on Iris Xe — well within TDR budget.
+// Discrete GPUs can handle thousands, but 128 is safe universally.
+const maxPendingBeforeFlush = 128
 
 // copyGPUBuffer creates a GPU-to-GPU copy without CPU round-trip.
 // This is critical for LazyMode performance - avoids GPU→CPU→GPU transfers.

@@ -7,7 +7,7 @@ import (
 // Float32 inplace operations
 
 func addInplaceFloat32(a, b []float32) {
-	if simdAddInplaceFloat32 != nil {
+	if simdAddInplaceFloat32 != nil && len(a) >= simdAddDispatchThreshold {
 		simdAddInplaceFloat32(a, b)
 		return
 	}
@@ -17,7 +17,7 @@ func addInplaceFloat32(a, b []float32) {
 }
 
 func subInplaceFloat32(a, b []float32) {
-	if simdSubInplaceFloat32 != nil {
+	if simdSubInplaceFloat32 != nil && len(a) >= simdSubDispatchThreshold {
 		simdSubInplaceFloat32(a, b)
 		return
 	}
@@ -27,7 +27,7 @@ func subInplaceFloat32(a, b []float32) {
 }
 
 func mulInplaceFloat32(a, b []float32) {
-	if simdMulInplaceFloat32 != nil {
+	if simdMulInplaceFloat32 != nil && len(a) >= simdMulDispatchThreshold {
 		simdMulInplaceFloat32(a, b)
 		return
 	}
@@ -37,7 +37,7 @@ func mulInplaceFloat32(a, b []float32) {
 }
 
 func divInplaceFloat32(a, b []float32) {
-	if simdDivInplaceFloat32 != nil {
+	if simdDivInplaceFloat32 != nil && len(a) >= simdDivDispatchThreshold {
 		simdDivInplaceFloat32(a, b)
 		return
 	}
@@ -49,7 +49,7 @@ func divInplaceFloat32(a, b []float32) {
 // Float32 vectorized operations
 
 func addVectorizedFloat32(dst, a, b []float32) {
-	if simdAddVectorizedFloat32 != nil {
+	if simdAddVectorizedFloat32 != nil && len(a) >= simdAddDispatchThreshold {
 		simdAddVectorizedFloat32(dst, a, b)
 		return
 	}
@@ -59,7 +59,7 @@ func addVectorizedFloat32(dst, a, b []float32) {
 }
 
 func subVectorizedFloat32(dst, a, b []float32) {
-	if simdSubVectorizedFloat32 != nil {
+	if simdSubVectorizedFloat32 != nil && len(a) >= simdSubDispatchThreshold {
 		simdSubVectorizedFloat32(dst, a, b)
 		return
 	}
@@ -69,7 +69,7 @@ func subVectorizedFloat32(dst, a, b []float32) {
 }
 
 func mulVectorizedFloat32(dst, a, b []float32) {
-	if simdMulVectorizedFloat32 != nil {
+	if simdMulVectorizedFloat32 != nil && len(a) >= simdMulDispatchThreshold {
 		simdMulVectorizedFloat32(dst, a, b)
 		return
 	}
@@ -79,7 +79,7 @@ func mulVectorizedFloat32(dst, a, b []float32) {
 }
 
 func divVectorizedFloat32(dst, a, b []float32) {
-	if simdDivVectorizedFloat32 != nil {
+	if simdDivVectorizedFloat32 != nil && len(a) >= simdDivDispatchThreshold {
 		simdDivVectorizedFloat32(dst, a, b)
 		return
 	}

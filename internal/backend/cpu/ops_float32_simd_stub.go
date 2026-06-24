@@ -10,6 +10,11 @@ var simdSubInplaceFloat32 func(a, b []float32)
 var simdMulInplaceFloat32 func(a, b []float32)
 var simdDivInplaceFloat32 func(a, b []float32)
 
+var simdAddDispatchThreshold int
+var simdSubDispatchThreshold int
+var simdMulDispatchThreshold int
+var simdDivDispatchThreshold int
+
 var simdAddVectorizedFloat32 func(dst, a, b []float32)
 var simdSubVectorizedFloat32 func(dst, a, b []float32)
 var simdMulVectorizedFloat32 func(dst, a, b []float32)

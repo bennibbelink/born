@@ -11,6 +11,11 @@ var simdSubInplaceFloat32 func(a, b []float32)
 var simdMulInplaceFloat32 func(a, b []float32)
 var simdDivInplaceFloat32 func(a, b []float32)
 
+var simdAddDispatchThreshold int
+var simdSubDispatchThreshold int
+var simdMulDispatchThreshold int
+var simdDivDispatchThreshold int
+
 var simdAddVectorizedFloat32 func(dst, a, b []float32)
 var simdSubVectorizedFloat32 func(dst, a, b []float32)
 var simdMulVectorizedFloat32 func(dst, a, b []float32)
@@ -18,6 +23,10 @@ var simdDivVectorizedFloat32 func(dst, a, b []float32)
 
 func init() {
 	if archsimd.X86.AVX() {
+		simdAddDispatchThreshold = 8
+		simdSubDispatchThreshold = 8
+		simdMulDispatchThreshold = 8
+		simdDivDispatchThreshold = 8
 		simdAddInplaceFloat32 = avxAddInplaceFloat32
 		simdSubInplaceFloat32 = avxSubInplaceFloat32
 		simdMulInplaceFloat32 = avxMulInplaceFloat32
@@ -29,6 +38,10 @@ func init() {
 		simdDivVectorizedFloat32 = avxDivVectorizedFloat32
 	}
 	if archsimd.X86.AVX512() {
+		simdAddDispatchThreshold = 16
+		simdSubDispatchThreshold = 16
+		simdMulDispatchThreshold = 16
+		simdDivDispatchThreshold = 16
 		simdAddInplaceFloat32 = avx512AddInplaceFloat32
 		simdSubInplaceFloat32 = avx512SubInplaceFloat32
 		simdMulInplaceFloat32 = avx512MulInplaceFloat32

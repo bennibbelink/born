@@ -162,41 +162,6 @@ func (cpu *CPUBackend) Reshape(t *tensor.RawTensor, newShape tensor.Shape) *tens
 	return result
 }
 
-// ReLU applies ReLU activation: max(0, x).
-func (cpu *CPUBackend) ReLU(x *tensor.RawTensor) *tensor.RawTensor {
-	result, err := tensor.NewRaw(x.Shape(), x.DType(), cpu.device)
-	if err != nil {
-		panic(fmt.Sprintf("relu: %v", err))
-	}
-
-	switch x.DType() {
-	case tensor.Float32:
-		src := x.AsFloat32()
-		dst := result.AsFloat32()
-		for i, v := range src {
-			if v > 0 {
-				dst[i] = v
-			} else {
-				dst[i] = 0
-			}
-		}
-	case tensor.Float64:
-		src := x.AsFloat64()
-		dst := result.AsFloat64()
-		for i, v := range src {
-			if v > 0 {
-				dst[i] = v
-			} else {
-				dst[i] = 0
-			}
-		}
-	default:
-		panic(fmt.Sprintf("relu: unsupported dtype %s", x.DType()))
-	}
-
-	return result
-}
-
 // Sigmoid applies sigmoid activation: 1 / (1 + exp(-x)).
 func (cpu *CPUBackend) Sigmoid(x *tensor.RawTensor) *tensor.RawTensor {
 	result, err := tensor.NewRaw(x.Shape(), x.DType(), cpu.device)

@@ -67,8 +67,13 @@ func avx2ExpFloat64(dst, src []float64) {
 // Cephes-derived minimax polynomial coefficients for exp(r), r in
 // [-ln2/2, ln2/2]. Same constants used by glibc/SLEEF-style expf.
 const (
-	expHi   = 88.37625885009765625 // clamp: exp(x) overflows float32 above this
-	expLo   = -87.3365478515625    // clamp: exp(x) underflows to 0 below this
+	// Upper bound of SIMD-safe range for exp(x) approximation.
+	// Values above this are diverted to scalar/fallback handling.
+	expClampHi = 88.37625885009765625
+	// Lower bound of SIMD-safe range for exp(x) approximation.
+	// Values below this threshold are diverted to scalar/fallback handling.
+	expClampLo = -87.3365478515625
+	// Bias on IEEE-754 float32 exponent bits.
 	expBias = 127
 
 	log2E = 1.44269504088896341 // log2(e)
@@ -88,55 +93,88 @@ const (
 )
 
 type expConstantsFloat32x8 struct {
-	inf, negInf, nan, one, zero       archsimd.Float32x8
-	expBias                           archsimd.Int32x8
-	expHi, expLo, log2E, ln2Hi, ln2Lo archsimd.Float32x8
-	c0, c1, c2, c3, c4, c5            archsimd.Float32x8
+	inf, negInf, nan, one, zero                           archsimd.Float32x8
+	expBias                                               archsimd.Int32x8
+	expClampHi, expClampLo, expOverflowHi, expUnderflowLo archsimd.Float32x8
+	log2E, ln2Hi, ln2Lo                                   archsimd.Float32x8
+	c0, c1, c2, c3, c4, c5                                archsimd.Float32x8
 }
 
 func newExpConstantsFloat32x8() *expConstantsFloat32x8 {
 	return &expConstantsFloat32x8{
-		inf:     archsimd.BroadcastFloat32x8(float32(math.Inf(1))),
-		negInf:  archsimd.BroadcastFloat32x8(float32(math.Inf(-1))),
-		nan:     archsimd.BroadcastFloat32x8(float32(math.NaN())),
-		one:     archsimd.BroadcastFloat32x8(float32(1.0)),
-		zero:    archsimd.BroadcastFloat32x8(float32(0.0)),
-		expHi:   archsimd.BroadcastFloat32x8(float32(expHi)),
-		expLo:   archsimd.BroadcastFloat32x8(float32(expLo)),
-		expBias: archsimd.BroadcastInt32x8(127),
-		log2E:   archsimd.BroadcastFloat32x8(float32(log2E)),
-		ln2Hi:   archsimd.BroadcastFloat32x8(float32(ln2Hi)),
-		ln2Lo:   archsimd.BroadcastFloat32x8(float32(ln2Lo)),
-		c0:      archsimd.BroadcastFloat32x8(float32(c0)),
-		c1:      archsimd.BroadcastFloat32x8(float32(c1)),
-		c2:      archsimd.BroadcastFloat32x8(float32(c2)),
-		c3:      archsimd.BroadcastFloat32x8(float32(c3)),
-		c4:      archsimd.BroadcastFloat32x8(float32(c4)),
-		c5:      archsimd.BroadcastFloat32x8(float32(c5)),
+		inf:            archsimd.BroadcastFloat32x8(float32(math.Inf(1))),
+		negInf:         archsimd.BroadcastFloat32x8(float32(math.Inf(-1))),
+		nan:            archsimd.BroadcastFloat32x8(float32(math.NaN())),
+		one:            archsimd.BroadcastFloat32x8(float32(1.0)),
+		zero:           archsimd.BroadcastFloat32x8(float32(0.0)),
+		expClampHi:     archsimd.BroadcastFloat32x8(float32(expClampHi)),
+		expClampLo:     archsimd.BroadcastFloat32x8(float32(expClampLo)),
+		expOverflowHi:  archsimd.BroadcastFloat32x8(float32(math.Log(math.MaxFloat32))),
+		expUnderflowLo: archsimd.BroadcastFloat32x8(float32(math.Log(math.SmallestNonzeroFloat32))),
+		expBias:        archsimd.BroadcastInt32x8(expBias),
+		log2E:          archsimd.BroadcastFloat32x8(float32(log2E)),
+		ln2Hi:          archsimd.BroadcastFloat32x8(float32(ln2Hi)),
+		ln2Lo:          archsimd.BroadcastFloat32x8(float32(ln2Lo)),
+		c0:             archsimd.BroadcastFloat32x8(float32(c0)),
+		c1:             archsimd.BroadcastFloat32x8(float32(c1)),
+		c2:             archsimd.BroadcastFloat32x8(float32(c2)),
+		c3:             archsimd.BroadcastFloat32x8(float32(c3)),
+		c4:             archsimd.BroadcastFloat32x8(float32(c4)),
+		c5:             archsimd.BroadcastFloat32x8(float32(c5)),
 	}
 }
 
-// avx2ExpFloat32x8 computes exp(x) for 8 float32 lanes in parallel (one AVX2 register).
+// avx2ExpFloat32x8 computes exp(x) for 8 float32 lanes in parallel using a single AVX2 register.
 //
-// Uses a Cephes-derived minimax polynomial approximation (glibc/SLEEF-style expf):
-//  1. Range reduction: x = n·ln2 + r, |r| <= ln2/2
-//  2. Approximate exp(r) with polynomial P(r)
-//  3. Reconstruct 2^n via IEEE-754 bit manipulation
-//  4. exp(x) = exp(r) · 2^n
+// The implementation follows a Cephes-derived minimax approximation (glibc/SLEEF-style expf)
+// with SIMD-optimized range reduction and polynomial evaluation:
+//
+//  1. Fast SIMD path
+//     For inputs in [expClampLo, expClampHi], the function performs fully vectorized
+//     computation:
+//     - Range reduction: x = n*ln2 + r, |r| ≤ ln2/2
+//     - Polynomial approximation: exp(r) = P(r)
+//     - Exponent reconstruction: 2^n via IEEE-754 bit manipulation
+//     - Final composition: exp(x) = exp(r) * 2^n
+//
+//  2. Scalar fallback (edge stability domain)
+//     For inputs outside the SIMD clamp range but still within finite overflow/underflow
+//     bounds (expClampHi, log(MaxFloat32)] and [log(SmallestNonzeroFloat32), expClampLo) the function falls back to a scalar implementation.
+//
+//  3. Inputs outside the finite exponent range are handled directly:
+//     - x > log(MaxFloat32) returns +Inf (overflow)
+//     - x < log(SmallestNonzeroFloat32) returns 0 (underflow)
+//
+//  4. Special value propagation: NaN and ±Inf inputs are handled explicitly.
 func avx2ExpFloat32x8(x archsimd.Float32x8) archsimd.Float32x8 {
 	c := expFloat32x8Constants
+
+	// fall back to scalar if there are values between the clamp range and the overflow/underflow range
+	upperEdgeMask := x.Greater(c.expClampHi).And(x.LessEqual(c.expOverflowHi))
+	lowerEdgeMask := x.Less(c.expClampLo).And(x.GreaterEqual(c.expUnderflowLo))
+	edgeMask := upperEdgeMask.Or(lowerEdgeMask)
+	edgeMaskBits := edgeMask.ToBits()
+	if edgeMaskBits > 0 {
+		src := make([]float32, 8)
+		dst := make([]float32, 8)
+		x.StoreSlice(src)
+		expScalar(dst, src)
+		result := archsimd.LoadFloat32x8Slice(dst)
+		return result
+	}
+
 	// mask special values before clamping
 	nanMask := x.IsNaN()
 	posInfMask := x.Equal(c.inf)
 	negInfMask := x.Equal(c.negInf)
 
 	// detect inputs that would overflow/underflow (before clamping)
-	overflowMask := x.Greater(c.expHi)
-	underflowMask := x.Less(c.expLo)
+	overflowMask := x.Greater(c.expOverflowHi)
+	underflowMask := x.Less(c.expUnderflowLo)
 
 	// clamp to avoid garbage in the exponent reconstruction for extreme values
-	xClamped := x.Min(c.expHi)
-	xClamped = xClamped.Max(c.expLo)
+	xClamped := x.Min(c.expClampHi)
+	xClamped = xClamped.Max(c.expClampLo)
 
 	// range reduction: x = n*ln2 + r, |r| <= ln2/2
 	n := xClamped.Mul(c.log2E).RoundToEven()

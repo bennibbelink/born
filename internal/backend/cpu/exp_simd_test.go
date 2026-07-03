@@ -115,10 +115,10 @@ func TestExpF32_KnownValues(t *testing.T) {
 			pattern := []float32{
 				0,
 				float32(math.Copysign(0, -1)), // -0
-				float32(f32ExpHi),              // exactly at overflow threshold
-				float32(f32ExpHi) - 1,          // just below overflow
-				float32(f32ExpLo),              // exactly at underflow threshold
-				float32(f32ExpLo) + 1,          // just above underflow
+				float32(f32ExpHi),             // exactly at overflow threshold
+				float32(f32ExpHi) - 1,         // just below overflow
+				float32(f32ExpLo),             // exactly at underflow threshold
+				float32(f32ExpLo) + 1,         // just above underflow
 				1,
 				-1,
 				2,
@@ -165,10 +165,10 @@ func TestExpF64_KnownValues(t *testing.T) {
 			pattern := []float64{
 				0,
 				math.Copysign(0, -1), // -0
-				f64ExpHi,              // exactly at overflow threshold
-				f64ExpHi - 1,          // just below overflow
-				f64ExpLo,              // exactly at underflow threshold
-				f64ExpLo + 1,          // just above underflow
+				f64ExpHi,             // exactly at overflow threshold
+				f64ExpHi - 1,         // just below overflow
+				f64ExpLo,             // exactly at underflow threshold
+				f64ExpLo + 1,         // just above underflow
 				1,
 				-1,
 				2,

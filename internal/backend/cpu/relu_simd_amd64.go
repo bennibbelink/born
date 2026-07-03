@@ -58,8 +58,8 @@ func avx512ReluFloat32(dst, src []float32) {
 	reluScalar(dst[i:], src[i:])
 }
 
-// avxReluFloat64 computes dst[i] = max(0, src[i]) using AVX (256-bit, 8 float64/vector).
-// Processes 8 elements per vector iteration with a scalar tail for the final 0-7 elements.
+// avxReluFloat64 computes dst[i] = max(0, src[i]) using AVX (256-bit, 4 float64/vector).
+// Processes 4 elements per vector iteration with a scalar tail for the final 0-3 elements.
 func avxReluFloat64(dst, src []float64) {
 	n := len(src)
 	i := 0

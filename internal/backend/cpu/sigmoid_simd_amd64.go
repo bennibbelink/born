@@ -6,8 +6,8 @@ import "simd/archsimd"
 
 // Declared here for amd64+goexperiment.simd builds; the stub file provides the
 // same declaration for all other platforms/configurations.
-var simdSigmoidFloat32 func(dst, srt []float32)
-var simdSigmoidFloat64 func(dst, srt []float64)
+var simdSigmoidFloat32 func(dst, src []float32)
+var simdSigmoidFloat64 func(dst, src []float64)
 
 func init() {
 	if archsimd.X86.AVX2() {

@@ -13,7 +13,7 @@ type sigmoidTestCase[T float32 | float64] struct {
 	srcGenerator func(*rand.Rand) T
 }
 
-// TestSigmoidF32_SIMDMatchesScalar verifies that the SIMD float32 Relu matches the scalar result.
+// TestSigmoidF32_SIMDMatchesScalar verifies that the SIMD float32 Sigmoid matches the scalar result.
 func TestSigmoidF32_SIMDMatchesScalar(t *testing.T) {
 	if simdSigmoidFloat32 == nil {
 		t.Skip("SIMD implementation not available (build without GOEXPERIMENT=simd or non-amd64)")
@@ -138,7 +138,7 @@ func BenchmarkSigmoidF64_Scalar(b *testing.B) {
 	}
 }
 
-// BenchmarkSigmoidF64_SIMD benchmarks float64 Relu using the SIMD implementation.
+// BenchmarkSigmoidF64_SIMD benchmarks float64 Sigmoid using the SIMD implementation.
 func BenchmarkSigmoidF64_SIMD(b *testing.B) {
 	if simdSigmoidFloat64 == nil {
 		b.Skip("SIMD implementation not available (build without GOEXPERIMENT=simd or non-amd64)")

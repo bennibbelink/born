@@ -16,7 +16,7 @@ type expTestCase[T float32 | float64] struct {
 // expFloat32SpecialCases returns a random value from expF32SeedOptions.
 // These values stress the SIMD range-reduction + polynomial approximation.
 func expFloat32SpecialCases(rng *rand.Rand) float32 {
-	i := rand.Int()
+	i := rng.Int()
 	opts := expF32SeedOptions()
 	return opts[i%len(opts)]
 }
@@ -63,7 +63,7 @@ func TestExpF32_SIMDMatchesScalar(t *testing.T) {
 // expFloat64SpecialCases returns a random value from expF64SeedOptions.
 // These values stress the SIMD range-reduction + polynomial approximation.
 func expFloat64SpecialCases(rng *rand.Rand) float64 {
-	i := rand.Int()
+	i := rng.Int()
 	opts := expF64SeedOptions()
 	return opts[i%len(opts)]
 }

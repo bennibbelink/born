@@ -7,33 +7,6 @@ import (
 	"github.com/born-ml/born/internal/tensor"
 )
 
-// Exp computes element-wise exponential: exp(x).
-func (cpu *CPUBackend) Exp(x *tensor.RawTensor) *tensor.RawTensor {
-	result, err := tensor.NewRaw(x.Shape(), x.DType(), cpu.device)
-	if err != nil {
-		panic(fmt.Sprintf("exp: %v", err))
-	}
-
-	switch x.DType() {
-	case tensor.Float32:
-		src := x.AsFloat32()
-		dst := result.AsFloat32()
-		for i, v := range src {
-			dst[i] = float32(math.Exp(float64(v)))
-		}
-	case tensor.Float64:
-		src := x.AsFloat64()
-		dst := result.AsFloat64()
-		for i, v := range src {
-			dst[i] = math.Exp(v)
-		}
-	default:
-		panic(fmt.Sprintf("exp: unsupported dtype %s (only float32/float64 supported)", x.DType()))
-	}
-
-	return result
-}
-
 // Log computes element-wise natural logarithm: ln(x).
 func (cpu *CPUBackend) Log(x *tensor.RawTensor) *tensor.RawTensor {
 	result, err := tensor.NewRaw(x.Shape(), x.DType(), cpu.device)

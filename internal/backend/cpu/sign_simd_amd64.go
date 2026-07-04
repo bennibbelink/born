@@ -164,10 +164,10 @@ func avx2SignInt32(dst, src []int32) {
 		positiveMask := srcLoaded.Greater(zerosLoaded)
 		negativeMask := srcLoaded.Less(zerosLoaded)
 
-		negs := onesLoaded.Masked(negativeMask) // 1.0 where src[i] < 0
+		negs := onesLoaded.Masked(negativeMask) // 1 where src[i] < 0
 
-		result := onesLoaded.Masked(positiveMask) // 1.0 where src[i] > 0
-		result = result.Sub(negs)                 // -1.0 where src[i] < 0, 1.0 where src[i] > 0
+		result := onesLoaded.Masked(positiveMask) // 1 where src[i] > 0
+		result = result.Sub(negs)                 // -1 where src[i] < 0, 1 where src[i] > 0
 
 		result.StoreSlice(dst[i:])
 	}
@@ -191,10 +191,10 @@ func avx512SignInt32(dst, src []int32) {
 		positiveMask := srcLoaded.Greater(zerosLoaded)
 		negativeMask := srcLoaded.Less(zerosLoaded)
 
-		negs := onesLoaded.Masked(negativeMask) // 1.0 where src[i] < 0
+		negs := onesLoaded.Masked(negativeMask) // 1 where src[i] < 0
 
-		result := onesLoaded.Masked(positiveMask) // 1.0 where src[i] > 0
-		result = result.Sub(negs)                 // -1.0 where src[i] < 0, 1.0 where src[i] > 0
+		result := onesLoaded.Masked(positiveMask) // 1 where src[i] > 0
+		result = result.Sub(negs)                 // -1 where src[i] < 0, 1 where src[i] > 0
 
 		result.StoreSlice(dst[i:])
 	}
@@ -218,10 +218,10 @@ func avx2SignInt64(dst, src []int64) {
 		positiveMask := srcLoaded.Greater(zerosLoaded)
 		negativeMask := srcLoaded.Less(zerosLoaded)
 
-		negs := onesLoaded.Masked(negativeMask) // 1.0 where src[i] < 0
+		negs := onesLoaded.Masked(negativeMask) // 1 where src[i] < 0
 
-		result := onesLoaded.Masked(positiveMask) // 1.0 where src[i] > 0
-		result = result.Sub(negs)                 // -1.0 where src[i] < 0, 1.0 where src[i] > 0
+		result := onesLoaded.Masked(positiveMask) // 1 where src[i] > 0
+		result = result.Sub(negs)                 // -1 where src[i] < 0, 1 where src[i] > 0
 
 		result.StoreSlice(dst[i:])
 	}
@@ -245,10 +245,10 @@ func avx512SignInt64(dst, src []int64) {
 		positiveMask := srcLoaded.Greater(zerosLoaded)
 		negativeMask := srcLoaded.Less(zerosLoaded)
 
-		negs := onesLoaded.Masked(negativeMask) // 1.0 where src[i] < 0
+		negs := onesLoaded.Masked(negativeMask) // 1 where src[i] < 0
 
-		result := onesLoaded.Masked(positiveMask) // 1.0 where src[i] > 0
-		result = result.Sub(negs)                 // -1.0 where src[i] < 0, 1.0 where src[i] > 0
+		result := onesLoaded.Masked(positiveMask) // 1 where src[i] > 0
+		result = result.Sub(negs)                 // -1 where src[i] < 0, 1 where src[i] > 0
 
 		result.StoreSlice(dst[i:])
 	}

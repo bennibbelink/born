@@ -140,6 +140,8 @@ func newExpConstantsFloat32x8() *expConstantsFloat32x8 {
 //  2. Scalar fallback (edge stability domain)
 //     For inputs outside the SIMD clamp range but still within finite overflow/underflow
 //     bounds (expClampHi, log(MaxFloat32)] and [log(SmallestNonzeroFloat32), expClampLo) the function falls back to a scalar implementation.
+//     Note: when ANY single lane falls in this edge domain, ALL 8 lanes are computed via the scalar fallback. The lower edge
+//     domain spans [-103.3, -87.3] while the upper edge is only ~0.35 units ([88.376, 88.723]), typical ML values rarely hit this.
 //
 //  3. Inputs outside the finite exponent range are handled directly:
 //     - x > log(MaxFloat32) returns +Inf (overflow)

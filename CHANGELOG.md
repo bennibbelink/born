@@ -5,6 +5,22 @@ All notable changes to the Born ML Framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.15] - 2026-07-04
+
+### Added
+
+- **SIMD ReLU** — AVX + AVX-512 branchless max(0, x). Up to 22.9× speedup ([#119](https://github.com/born-ml/born/pull/119) by [@bennibbelink](https://github.com/bennibbelink))
+- **SIMD Exp** — Cephes/SLEEF minimax polynomial with FMA Horner evaluation. AVX2+FMA. Edge-domain scalar fallback for numerical stability. Up to 813× vs scalar `math.Exp` ([#119](https://github.com/born-ml/born/pull/119) by [@bennibbelink](https://github.com/bennibbelink))
+- **SIMD Sigmoid** — `1/(1+exp(-x))` composing per-vector SIMD Exp. AVX2+FMA. Up to 726× ([#119](https://github.com/born-ml/born/pull/119) by [@bennibbelink](https://github.com/bennibbelink))
+- **SIMD SiLU** — `x*sigmoid(x)` composing per-vector SIMD Exp. AVX2+FMA. Up to 600× ([#119](https://github.com/born-ml/born/pull/119) by [@bennibbelink](https://github.com/bennibbelink))
+- Exp fuzz tests with domain-specific seed corpus (ln2 boundaries, overflow/underflow edges, subnormals)
+
+### Changed
+
+- **gogpu/wgpu** v0.30.7 → v0.30.9
+- **goffi** v0.5.5 → v0.5.6 (callback stack-move corruption fix)
+- `activation.go` → `softmax.go` (Softmax was the only remaining activation)
+
 ## [0.9.14] - 2026-06-29
 
 ### Added

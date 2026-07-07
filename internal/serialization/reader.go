@@ -1,6 +1,7 @@
 package serialization
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -12,7 +13,8 @@ import (
 
 // BornReader reads models from .born format.
 type BornReader struct {
-	file       *os.File
+	reader     io.ReadSeeker
+	closer     io.Closer
 	header     Header
 	flags      uint32
 	version    uint32
@@ -44,39 +46,66 @@ func NewBornReaderWithOptions(path string, opts ReaderOptions) (*BornReader, err
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
 
-	reader := &BornReader{
-		file:   file,
-		opts:   opts,
-		closed: false,
-	}
-
-	if err := reader.parseHeader(); err != nil {
-		_ = file.Close() // Best effort close on error
-		return nil, fmt.Errorf("failed to parse header: %w", err)
-	}
-
-	// Calculate data section size
-	fileInfo, err := file.Stat()
+	stat, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
 		return nil, fmt.Errorf("failed to stat file: %w", err)
 	}
-	reader.dataSize = fileInfo.Size() - reader.dataOffset
+
+	reader, err := newBornReaderFromReader(file, stat.Size(), opts)
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	reader.closer = file
+	return reader, nil
+}
+
+// newBornReaderFromReader creates a new .born reader from any io.ReadSeeker.
+//
+// The caller must provide the total readable size in bytes. If a closer is set
+// on the returned BornReader (via the closer field), calling BornReader.Close()
+// will close the underlying resource. Otherwise, the caller is responsible for
+// managing the reader's lifecycle.
+func newBornReaderFromReader(r io.ReadSeeker, size int64, opts ReaderOptions) (*BornReader, error) {
+	reader := &BornReader{
+		reader: r,
+		opts:   opts,
+	}
+
+	if err := reader.parseHeader(); err != nil {
+		return nil, fmt.Errorf("failed to parse header: %w", err)
+	}
+
+	// Calculate data section size
+	reader.dataSize = size - reader.dataOffset
 
 	// Validate header if requested
 	if err := ValidateHeader(&reader.header, reader.dataSize, opts.ValidationLevel); err != nil {
-		_ = file.Close()
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
 
 	return reader, nil
 }
 
+// NewBornReaderFromBytes creates a new .born reader from a byte slice.
+func NewBornReaderFromBytes(data []byte) (*BornReader, error) {
+	return NewBornReaderFromBytesWithOptions(data, ReaderOptions{
+		ValidationLevel: ValidationStrict,
+	})
+}
+
+// NewBornReaderFromBytesWithOptions creates a new .born reader from a byte slice
+// with custom options.
+func NewBornReaderFromBytesWithOptions(data []byte, opts ReaderOptions) (*BornReader, error) {
+	return newBornReaderFromReader(bytes.NewReader(data), int64(len(data)), opts)
+}
+
 // parseHeader reads and parses the .born file header.
 func (r *BornReader) parseHeader() error {
 	// Read magic bytes
 	magic := make([]byte, 4)
-	if _, err := io.ReadFull(r.file, magic); err != nil {
+	if _, err := io.ReadFull(r.reader, magic); err != nil {
 		return fmt.Errorf("failed to read magic bytes: %w", err)
 	}
 	if string(magic) != MagicBytes {
@@ -84,7 +113,7 @@ func (r *BornReader) parseHeader() error {
 	}
 
 	// Read version
-	if err := binary.Read(r.file, binary.LittleEndian, &r.version); err != nil {
+	if err := binary.Read(r.reader, binary.LittleEndian, &r.version); err != nil {
 		return fmt.Errorf("failed to read version: %w", err)
 	}
 
@@ -102,13 +131,13 @@ func (r *BornReader) parseHeader() error {
 // parseHeaderV1 parses v1 format header (no checksum).
 func (r *BornReader) parseHeaderV1() error {
 	// Read flags
-	if err := binary.Read(r.file, binary.LittleEndian, &r.flags); err != nil {
+	if err := binary.Read(r.reader, binary.LittleEndian, &r.flags); err != nil {
 		return fmt.Errorf("failed to read flags: %w", err)
 	}
 
 	// Read header size
 	var headerSize uint64
-	if err := binary.Read(r.file, binary.LittleEndian, &headerSize); err != nil {
+	if err := binary.Read(r.reader, binary.LittleEndian, &headerSize); err != nil {
 		return fmt.Errorf("failed to read header size: %w", err)
 	}
 
@@ -119,7 +148,7 @@ func (r *BornReader) parseHeaderV1() error {
 
 	// Read header JSON
 	headerBytes := make([]byte, headerSize)
-	if _, err := io.ReadFull(r.file, headerBytes); err != nil {
+	if _, err := io.ReadFull(r.reader, headerBytes); err != nil {
 		return fmt.Errorf("failed to read header: %w", err)
 	}
 
@@ -139,13 +168,13 @@ func (r *BornReader) parseHeaderV1() error {
 // parseHeaderV2 parses v2 format header (with checksum).
 func (r *BornReader) parseHeaderV2() error {
 	// Seek back to start to read fixed header
-	if _, err := r.file.Seek(0, io.SeekStart); err != nil {
+	if _, err := r.reader.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("failed to seek to start: %w", err)
 	}
 
 	// Read entire fixed header (64 bytes)
 	fixedHeader := make([]byte, FixedHeaderSizeV2)
-	if _, err := io.ReadFull(r.file, fixedHeader); err != nil {
+	if _, err := io.ReadFull(r.reader, fixedHeader); err != nil {
 		return fmt.Errorf("failed to read fixed header: %w", err)
 	}
 
@@ -175,7 +204,7 @@ func (r *BornReader) parseHeaderV2() error {
 
 	// Read header JSON (already positioned at offset 0x40)
 	headerBytes := make([]byte, headerSize)
-	if _, err := io.ReadFull(r.file, headerBytes); err != nil {
+	if _, err := io.ReadFull(r.reader, headerBytes); err != nil {
 		return fmt.Errorf("failed to read header JSON: %w", err)
 	}
 
@@ -193,10 +222,10 @@ func (r *BornReader) parseHeaderV2() error {
 	if !r.opts.SkipChecksumValidation {
 		// Read all tensor data
 		tensorData := make([]byte, dataSize)
-		if _, err := r.file.Seek(r.dataOffset, io.SeekStart); err != nil {
+		if _, err := r.reader.Seek(r.dataOffset, io.SeekStart); err != nil {
 			return fmt.Errorf("failed to seek to tensor data: %w", err)
 		}
-		if _, err := io.ReadFull(r.file, tensorData); err != nil {
+		if _, err := io.ReadFull(r.reader, tensorData); err != nil {
 			return fmt.Errorf("failed to read tensor data for checksum: %w", err)
 		}
 
@@ -254,13 +283,13 @@ func (r *BornReader) ReadTensorData(name string) ([]byte, error) {
 	absoluteOffset := r.dataOffset + meta.Offset
 
 	// Seek to tensor data
-	if _, err := r.file.Seek(absoluteOffset, io.SeekStart); err != nil {
+	if _, err := r.reader.Seek(absoluteOffset, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("failed to seek to tensor data: %w", err)
 	}
 
 	// Read data
 	data := make([]byte, meta.Size)
-	if _, err := io.ReadFull(r.file, data); err != nil {
+	if _, err := io.ReadFull(r.reader, data); err != nil {
 		return nil, fmt.Errorf("failed to read tensor data: %w", err)
 	}
 
@@ -327,13 +356,16 @@ func (r *BornReader) ReadStateDict(backend tensor.Backend) (map[string]*tensor.R
 	return stateDict, nil
 }
 
-// Close closes the reader and the underlying file.
+// Close closes the reader and its underlying resource (if any).
 func (r *BornReader) Close() error {
 	if r.closed {
 		return nil
 	}
 	r.closed = true
-	return r.file.Close()
+	if r.closer != nil {
+		return r.closer.Close()
+	}
+	return nil
 }
 
 // ReadFrom reads a state dictionary from an io.Reader.

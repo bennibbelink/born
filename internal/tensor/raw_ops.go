@@ -1,5 +1,3 @@
-//go:build !wasm
-
 // Package tensor raw_ops provides type-specific tensor operations for ONNX inference.
 // Type-specific implementations (Float32, Float64, Int32, Int64) are intentionally
 // similar/duplicated for performance - generics would add overhead.

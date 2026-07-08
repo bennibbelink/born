@@ -152,6 +152,24 @@ jobs:
     - name: Build all tools
       run: go build -v ./cmd/...
 
+  # WASM build check - Ensures WASM target compiles (#123)
+  build-wasm:
+    name: Build WASM
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.26'
+        cache: true
+
+    - name: Build for WASM
+      run: GOOS=js GOARCH=wasm go build ./...
+
   # Performance benchmarks (informational only)
   benchmarks:
     name: Benchmarks
@@ -175,7 +193,7 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     if: always()
-    needs: [unit-tests, lint, formatting, build-examples, build-tools, benchmarks]
+    needs: [unit-tests, lint, formatting, build-examples, build-tools, build-wasm, benchmarks]
     steps:
     - name: Check results
       run: |
@@ -184,6 +202,7 @@ jobs:
               "${{ needs.formatting.result }}" == "failure" || \
               "${{ needs.build-examples.result }}" == "failure" || \
               "${{ needs.build-tools.result }}" == "failure" || \
+              "${{ needs.build-wasm.result }}" == "failure" || \
               "${{ needs.benchmarks.result }}" == "failure" ]]; then
           echo "One or more required jobs failed"
           exit 1

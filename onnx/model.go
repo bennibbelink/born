@@ -1,3 +1,5 @@
+//go:build !wasm
+
 package onnx
 
 import "github.com/born-ml/born/internal/tensor"

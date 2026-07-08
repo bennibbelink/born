@@ -5,6 +5,12 @@ All notable changes to the Born ML Framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`nn.LoadFromBytes`** — load `.born` models from byte slices (`go:embed`, HTTP responses, database blobs). `BornReader` generalized from `*os.File` to `io.ReadSeeker` ([#122](https://github.com/born-ml/born/pull/122) by [@bennibbelink](https://github.com/bennibbelink))
+
 ## [0.9.16] - 2026-07-08
 
 ### Changed

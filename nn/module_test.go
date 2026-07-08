@@ -5,10 +5,14 @@
 package nn_test
 
 import (
+	"bytes"
+	"os"
 	"testing"
 
 	"github.com/born-ml/born/internal/backend/cpu"
+	"github.com/born-ml/born/internal/serialization"
 	"github.com/born-ml/born/internal/tensor"
+	"github.com/born-ml/born/internal/tolerance"
 	"github.com/born-ml/born/nn"
 )
 
@@ -153,5 +157,65 @@ func TestNewParameter(t *testing.T) {
 				t.Error("Tensor() returned different tensor")
 			}
 		})
+	}
+}
+
+func TestLoadFromBytesRoundTrip(t *testing.T) {
+	backend := cpu.New()
+
+	model := nn.NewLinear(784, 128, backend)
+
+	input := tensor.Randn[float32](tensor.Shape{1, 784}, backend)
+	pred1 := model.Forward(input)
+
+	tmpFile := t.TempDir() + "/model.born"
+	if err := nn.Save(model, tmpFile, "Linear", nil); err != nil {
+		t.Fatalf("Failed to save model: %v", err)
+	}
+
+	data, err := os.ReadFile(tmpFile)
+	if err != nil {
+		t.Fatalf("Failed to read saved file: %v", err)
+	}
+
+	model2 := nn.NewLinear(784, 128, backend)
+	if _, err := nn.LoadFromBytes(data, backend, model2); err != nil {
+		t.Fatalf("LoadFromBytes failed: %v", err)
+	}
+
+	pred2 := model2.Forward(input)
+
+	pred1Data := pred1.Data()
+	pred2Data := pred2.Data()
+	if err := tolerance.AssertAllApproxEqual(pred1Data, pred2Data, tolerance.NewDefaultTolerance[float32]()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadFromBytesInvalidData(t *testing.T) {
+	backend := cpu.New()
+	model := nn.NewLinear(10, 5, backend)
+
+	_, err := nn.LoadFromBytes([]byte("garbage"), backend, model)
+	if err == nil {
+		t.Fatal("Expected error for invalid data, got nil")
+	}
+}
+
+func TestLoadFromBytesShapeMismatch(t *testing.T) {
+	backend := cpu.New()
+
+	model := nn.NewLinear(10, 5, backend)
+	stateDict := model.StateDict()
+
+	var buf bytes.Buffer
+	if err := serialization.WriteTo(&buf, stateDict, "Linear", nil); err != nil {
+		t.Fatalf("WriteTo failed: %v", err)
+	}
+
+	model2 := nn.NewLinear(20, 5, backend)
+	_, err := nn.LoadFromBytes(buf.Bytes(), backend, model2)
+	if err == nil {
+		t.Fatal("Expected error for shape mismatch, got nil")
 	}
 }

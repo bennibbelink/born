@@ -135,3 +135,37 @@ func Load[B tensor.Backend](path string, backend B, module Module[B]) (serializa
 
 	return reader.Header(), nil
 }
+
+// LoadFromBytes loads a module from an in-memory .born byte slice.
+//
+// This is a convenience function that reads a state dictionary from a byte
+// slice and loads it into the provided module. It is useful for loading models
+// from HTTP responses, embedded files, or database blobs without writing to
+// disk first.
+//
+// Parameters:
+//   - data: The .born file contents as a byte slice
+//   - backend: Backend to use for tensors
+//   - module: The module to load into (will be modified)
+//
+// Returns the header and an error if loading fails.
+func LoadFromBytes[B tensor.Backend](data []byte, backend B, module Module[B]) (serialization.Header, error) {
+	reader, err := serialization.NewBornReaderFromBytes(data)
+	if err != nil {
+		return serialization.Header{}, err
+	}
+	defer func() {
+		_ = reader.Close()
+	}()
+
+	stateDict, err := reader.ReadStateDict(backend)
+	if err != nil {
+		return serialization.Header{}, err
+	}
+
+	if err := module.LoadStateDict(stateDict); err != nil {
+		return serialization.Header{}, err
+	}
+
+	return reader.Header(), nil
+}

@@ -1,3 +1,5 @@
+//go:build !wasm
+
 // Package onnx provides ONNX model import functionality for Born ML framework.
 //
 // This package enables loading and running inference on ONNX (Open Neural Network Exchange)

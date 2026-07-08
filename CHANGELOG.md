@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`nn.LoadFromBytes`** — load `.born` models from byte slices (`go:embed`, HTTP responses, database blobs). `BornReader` generalized from `*os.File` to `io.ReadSeeker` ([#122](https://github.com/born-ml/born/pull/122) by [@bennibbelink](https://github.com/bennibbelink))
 
+### Fixed
+
+- **WASM build** — `GOOS=js GOARCH=wasm go build ./...` now compiles cleanly. Added platform stubs for `LazyGPUData` and `mmap`, removed incorrect `!wasm` constraint from pure Go tensor ops, excluded ONNX public API on WASM (matches internal package). Added WASM build check to CI ([#123](https://github.com/born-ml/born/issues/123), reported by [@bennibbelink](https://github.com/bennibbelink))
+
 ## [0.9.16] - 2026-07-08
 
 ### Changed

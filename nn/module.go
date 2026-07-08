@@ -5,6 +5,7 @@
 package nn
 
 import (
+	"github.com/born-ml/born/internal/nn"
 	"github.com/born-ml/born/internal/serialization"
 	"github.com/born-ml/born/tensor"
 )
@@ -79,20 +80,7 @@ type Module[B tensor.Backend] interface {
 //	model := nn.NewLinear(784, 10, backend)
 //	err := nn.Save(model, "model.born", "Linear", nil)
 func Save[B tensor.Backend](module Module[B], path, modelType string, metadata map[string]string) error {
-	// Get state dictionary
-	stateDict := module.StateDict()
-
-	// Create writer
-	writer, err := serialization.NewBornWriter(path)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = writer.Close()
-	}()
-
-	// Write state dictionary
-	return writer.WriteStateDict(stateDict, modelType, metadata)
+	return nn.Save(module, path, modelType, metadata)
 }
 
 // Load loads a module from a .born file.
@@ -113,27 +101,7 @@ func Save[B tensor.Backend](module Module[B], path, modelType string, metadata m
 //	model := nn.NewLinear(784, 10, backend)
 //	header, err := nn.Load("model.born", backend, model)
 func Load[B tensor.Backend](path string, backend B, module Module[B]) (serialization.Header, error) {
-	// Create reader
-	reader, err := serialization.NewBornReader(path)
-	if err != nil {
-		return serialization.Header{}, err
-	}
-	defer func() {
-		_ = reader.Close()
-	}()
-
-	// Read state dictionary
-	stateDict, err := reader.ReadStateDict(backend)
-	if err != nil {
-		return serialization.Header{}, err
-	}
-
-	// Load into module
-	if err := module.LoadStateDict(stateDict); err != nil {
-		return serialization.Header{}, err
-	}
-
-	return reader.Header(), nil
+	return nn.Load(path, backend, module)
 }
 
 // LoadFromBytes loads a module from an in-memory .born byte slice.

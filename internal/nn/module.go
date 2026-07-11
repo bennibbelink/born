@@ -85,7 +85,7 @@ type Module[B tensor.Backend] interface {
 //   - metadata: Optional metadata (can be nil)
 //
 // Returns an error if saving fails.
-func Save[B tensor.Backend](module Module[B], path, modelType string, metadata map[string]string) error {
+func Save[B tensor.Backend](module Module[B], path, modelType string, metadata map[string]string) (err error) {
 	// Get state dictionary
 	stateDict := module.StateDict()
 
@@ -101,8 +101,8 @@ func Save[B tensor.Backend](module Module[B], path, modelType string, metadata m
 	}()
 
 	// Write state dictionary
-	if err := writer.WriteStateDict(stateDict, modelType, metadata); err != nil {
-		return fmt.Errorf("failed to write state dict: %w", err)
+	if writeErr := writer.WriteStateDict(stateDict, modelType, metadata); writeErr != nil {
+		return fmt.Errorf("failed to write state dict: %w", writeErr)
 	}
 
 	return nil
@@ -119,7 +119,7 @@ func Save[B tensor.Backend](module Module[B], path, modelType string, metadata m
 //   - module: The module to load into (will be modified)
 //
 // Returns the header and an error if loading fails.
-func Load[B tensor.Backend](path string, backend B, module Module[B]) (serialization.Header, error) {
+func Load[B tensor.Backend](path string, backend B, module Module[B]) (header serialization.Header, err error) {
 	// Create reader
 	reader, err := serialization.NewBornReader(path)
 	if err != nil {
@@ -138,8 +138,8 @@ func Load[B tensor.Backend](path string, backend B, module Module[B]) (serializa
 	}
 
 	// Load into module
-	if err := module.LoadStateDict(stateDict); err != nil {
-		return serialization.Header{}, fmt.Errorf("failed to load state dict: %w", err)
+	if loadErr := module.LoadStateDict(stateDict); loadErr != nil {
+		return serialization.Header{}, fmt.Errorf("failed to load state dict: %w", loadErr)
 	}
 
 	return reader.Header(), nil

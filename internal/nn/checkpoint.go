@@ -79,7 +79,7 @@ type Checkpoint[B tensor.Backend] struct {
 //   - path: File path to write checkpoint to
 //
 // Returns an error if saving fails.
-func (c *Checkpoint[B]) Save(path string) error {
+func (c *Checkpoint[B]) Save(path string) (err error) {
 	// Get model state dict
 	modelStateDict := c.Model.StateDict()
 
@@ -177,7 +177,7 @@ func LoadCheckpoint[B tensor.Backend](
 	backend B,
 	model Module[B],
 	optimizer OptimizerState,
-) (*Checkpoint[B], error) {
+) (checkpoint *Checkpoint[B], err error) {
 	// Create reader
 	reader, err := serialization.NewBornReader(path)
 	if err != nil {
@@ -228,7 +228,7 @@ func LoadCheckpoint[B tensor.Backend](
 	}
 
 	// Create checkpoint
-	checkpoint := &Checkpoint[B]{
+	checkpoint = &Checkpoint[B]{
 		Model:     model,
 		Optimizer: optimizer,
 		Epoch:     header.CheckpointMeta.Epoch,

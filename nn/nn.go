@@ -392,7 +392,7 @@ type MultiHeadAttention[B tensor.Backend] = nn.MultiHeadAttention[B]
 //	mha := nn.NewMultiHeadAttention[B](768, 12, backend)  // BERT-base config
 //	output := mha.Forward(x, x, x, nil)  // Self-attention
 func NewMultiHeadAttention[B tensor.Backend](embedDim, numHeads int, backend B) *MultiHeadAttention[B] {
-	return nn.NewMultiHeadAttention[B](embedDim, numHeads, backend)
+	return nn.NewMultiHeadAttention(embedDim, numHeads, backend)
 }
 
 // Utility functions

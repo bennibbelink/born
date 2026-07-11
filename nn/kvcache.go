@@ -19,5 +19,5 @@ func NewKVCache[B tensor.Backend](
 	batchSize, numHeads, maxSeqLen, headDim int,
 	backend B,
 ) *KVCache[B] {
-	return nn.NewKVCache[B](batchSize, numHeads, maxSeqLen, headDim, backend)
+	return nn.NewKVCache(batchSize, numHeads, maxSeqLen, headDim, backend)
 }

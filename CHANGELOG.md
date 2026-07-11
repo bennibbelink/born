@@ -11,9 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`nn.LoadFromBytes`** — load `.born` models from byte slices (`go:embed`, HTTP responses, database blobs). `BornReader` generalized from `*os.File` to `io.ReadSeeker` ([#122](https://github.com/born-ml/born/pull/122) by [@bennibbelink](https://github.com/bennibbelink))
 
+### Changed
+
+- **`nn.Save`/`nn.Load`** — public functions now forward to `internal/nn` implementation, eliminating duplicated open/close/write logic. Consistent error context wrapping ([#128](https://github.com/born-ml/born/pull/128) by [@amery](https://github.com/amery))
+
 ### Fixed
 
 - **WASM build** — `GOOS=js GOARCH=wasm go build ./...` now compiles cleanly. Added platform stubs for `LazyGPUData` and `mmap`, removed incorrect `!wasm` constraint from pure Go tensor ops, excluded ONNX public API on WASM (matches internal package). Added WASM build check to CI ([#123](https://github.com/born-ml/born/issues/123), reported by [@bennibbelink](https://github.com/bennibbelink))
+- **`nn` close errors** — `Save`, `Load`, `Checkpoint.Save`, and `LoadCheckpoint` now surface `Close()` errors via named returns. Previously, deferred closures wrote to a dead local variable due to unnamed returns ([#127](https://github.com/born-ml/born/pull/127) by [@amery](https://github.com/amery))
 
 ## [0.9.16] - 2026-07-08
 

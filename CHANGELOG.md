@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **WASM build** — `GOOS=js GOARCH=wasm go build ./...` now compiles cleanly. Added platform stubs for `LazyGPUData` and `mmap`, removed incorrect `!wasm` constraint from pure Go tensor ops, excluded ONNX public API on WASM (matches internal package). Added WASM build check to CI ([#123](https://github.com/born-ml/born/issues/123), reported by [@bennibbelink](https://github.com/bennibbelink))
-- **`nn` close errors** — `Save`, `Load`, `Checkpoint.Save`, and `LoadCheckpoint` now surface `Close()` errors via named returns. Previously, deferred closures wrote to a dead local variable due to unnamed returns ([#127](https://github.com/born-ml/born/pull/127) by [@amery](https://github.com/amery))
+- **`nn` close errors** — all save/load functions (`Save`, `Load`, `LoadFromBytes`, `Checkpoint.Save`, `LoadCheckpoint`) now surface `Close()` errors via named returns. Previously, close errors were silently discarded ([#127](https://github.com/born-ml/born/pull/127) by [@amery](https://github.com/amery), [#130](https://github.com/born-ml/born/pull/130))
 
 ## [0.9.16] - 2026-07-08
 

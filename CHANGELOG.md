@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`nn.SaveTo`/`nn.LoadFrom`** — streaming Save/Load over `io.Writer`/`io.ReadSeeker` for HTTP responses, network connections, and in-memory buffers without touching disk. `nn.SaveToBytes` added as in-memory convenience. `LoadFromBytes` refactored as thin wrapper over `LoadFrom`. Serializer writer inverted onto `io.Writer`; `WriteTo` deduplication (~90 lines removed). Statement coverage 69.6% → 81.8% ([#133](https://github.com/born-ml/born/pull/133) by [@amery](https://github.com/amery))
+
 ## [0.9.17] - 2026-07-12
 
 ### Added

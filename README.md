@@ -86,7 +86,7 @@ prediction := model.Predict(image)
 - **GGUF Import** - llama.cpp format with K-quant dequantization (Q4_K, Q5_K, Q6_K, Q8_0)
 - **LLaMA** - `models/llama.LoadGGUF()` for end-to-end LLaMA inference; verified on TinyLlama 1.1B Q8_0 and Q4_K_M
 - **Injectable Attention** - swap attention implementation at model load time for research experiments
-- **Native Format** - `.born` format with `nn.Save()` / `nn.Load()`
+- **Native Format** - `.born` format with `nn.Save()` / `nn.Load()` / `nn.LoadFromBytes()` (`go:embed` support)
 - **Checkpoints** - Resume training with optimizer state preservation
 - **SafeTensors** - HuggingFace compatible export
 - **Reproducibility** - `nn.SetSeed()` for deterministic weight initialization

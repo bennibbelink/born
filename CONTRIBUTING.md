@@ -24,7 +24,7 @@ Born is a modern ML framework for Go, and we welcome contributions of all kinds 
 
 | Tool | Version | Purpose |
 |------|---------|---------|
-| **Go** | 1.25+ | [Download](https://go.dev/dl/) |
+| **Go** | 1.26+ | [Download](https://go.dev/dl/) |
 | **Git** | Latest | Version control |
 | **golangci-lint** | Latest | [Install](https://golangci-lint.run/usage/install/) |
 | **Make** | Any | Build automation (optional) |
@@ -414,20 +414,32 @@ All PRs run through CI:
 
 | Check | Description |
 |-------|-------------|
-| **Unit Tests** | Ubuntu, macOS, Windows (Go 1.25) |
+| **Unit Tests** | Ubuntu, macOS, Windows (Go 1.26) |
 | **Lint** | golangci-lint with project config |
 | **Code Formatting** | gofmt verification |
 | **Build Examples** | Compile all examples |
 | **Build Tools** | Compile CLI tools |
+| **Build WASM** | `GOOS=js GOARCH=wasm go build ./...` |
 | **Benchmarks** | Run performance benchmarks |
 | **Codecov** | Coverage reporting |
+
+### Merge Strategy
+
+We choose the merge method based on commit history:
+
+| History | Merge method | Rationale |
+|---------|-------------|-----------|
+| Clean semantic commits (each carries a distinct change) | `--merge` | Preserves author's commit structure |
+| Mixed/WIP commits (fixups, review changes) | `--squash` | Produces a clean single commit |
+
+If you have a preference, note it in the PR description (e.g., "please merge, not squash") and we'll respect it.
 
 ### Review Process
 
 1. CI runs automatically on PR creation
 2. Maintainer reviews code
 3. Feedback addressed (if any)
-4. Approval and merge (squash merge preferred)
+4. Approval and merge
 
 ---
 

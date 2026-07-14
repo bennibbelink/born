@@ -1,6 +1,6 @@
 // Package half converts the 16-bit floating-point storage encodings used by
-// model files to float32. Born has no native half-precision dtype, so format
-// readers widen on load.
+// model files — IEEE 754 half-precision (binary16) and bfloat16 — to float32.
+// Born has no native half-precision dtype, so format readers widen on load.
 package half
 
 import "math"
@@ -38,4 +38,10 @@ func Float16ToFloat32(h uint16) float32 {
 	}
 
 	return math.Float32frombits(result)
+}
+
+// BFloat16ToFloat32 converts a bfloat16 value to float32. bfloat16 is the top
+// 16 bits of the IEEE 754 float32 representation, so widening is a left shift.
+func BFloat16ToFloat32(b uint16) float32 {
+	return math.Float32frombits(uint32(b) << 16)
 }

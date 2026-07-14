@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/born-ml/born/internal/half"
 	"github.com/born-ml/born/internal/tensor"
 )
 
@@ -219,35 +220,59 @@ func safeTensorsDTypeToDataType(dtype SafeTensorsDType) (tensor.DataType, error)
 		return tensor.Uint8, nil
 	case SafeTensorsBool:
 		return tensor.Bool, nil
-	case SafeTensorsF16, SafeTensorsBF16:
-		// F16 and BF16 not directly supported - caller must handle conversion
-		return 0, fmt.Errorf("dtype %s requires conversion (not directly supported)", dtype)
 	default:
 		return 0, fmt.Errorf("unsupported dtype: %s", dtype)
 	}
 }
 
-// LoadTensor loads a tensor from SafeTensors file into Born tensor.
-// For F16/BF16, this function returns an error - caller must use ReadTensorData and convert manually.
+// halfWidener returns the function widening a half-precision SafeTensors dtype
+// to float32, and reports whether dtype is half-precision at all. Born has no
+// native half-precision dtype, so these have no safeTensorsDTypeToDataType
+// mapping; this is the only place that decides which dtypes are half.
+func halfWidener(dtype SafeTensorsDType) (func(uint16) float32, bool) {
+	switch dtype {
+	case SafeTensorsF16:
+		return half.Float16ToFloat32, true
+	case SafeTensorsBF16:
+		return half.BFloat16ToFloat32, true
+	default:
+		return nil, false
+	}
+}
+
+// LoadTensor loads a tensor from a SafeTensors file into a Born tensor.
+// F16 and BF16 tensors are widened to float32, since Born has no native
+// half-precision dtype; all other supported dtypes are copied verbatim.
 func (r *SafeTensorsReader) LoadTensor(name string, backend tensor.Backend) (*tensor.RawTensor, error) {
 	info, err := r.TensorInfo(name)
 	if err != nil {
 		return nil, err
 	}
 
-	// Convert dtype
-	dtype, err := safeTensorsDTypeToDataType(info.DType)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert dtype for tensor %s: %w", name, err)
-	}
-
-	// Convert shape
+	// Convert shape.
 	shape := tensor.Shape(info.Shape)
 	if err := shape.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid shape for tensor %s: %w", name, err)
 	}
 
-	// Read raw data
+	// F16 and BF16 have no native Born dtype, so they are widened to float32
+	// rather than mapped; LoadTensor always yields a directly usable tensor.
+	if widen, isHalf := halfWidener(info.DType); isHalf {
+		data, err := r.ReadTensorData(name)
+		if err != nil {
+			return nil, err
+		}
+		return loadHalfAsFloat32(name, shape, data, widen, backend)
+	}
+
+	// Resolve the dtype before reading, so an unsupported one is rejected
+	// without pulling the tensor's data off disk.
+	dtype, err := safeTensorsDTypeToDataType(info.DType)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert dtype for tensor %s: %w", name, err)
+	}
+
+	// Read raw data.
 	data, err := r.ReadTensorData(name)
 	if err != nil {
 		return nil, err
@@ -260,14 +285,42 @@ func (r *SafeTensorsReader) LoadTensor(name string, backend tensor.Backend) (*te
 			name, len(data), shape, info.DType, want)
 	}
 
-	// Create RawTensor
+	// Create RawTensor.
 	raw, err := tensor.NewRaw(shape, dtype, backend.Device())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create tensor: %w", err)
 	}
 
-	// Copy data
+	// Copy data.
 	copy(raw.Data(), data)
+
+	return raw, nil
+}
+
+// loadHalfAsFloat32 widens raw half-precision tensor bytes into a float32
+// RawTensor, element by element, through widen. Born has no native
+// half-precision dtype, so half-precision SafeTensors tensors are converted on
+// load. widen comes from halfWidener, which is what decides that a dtype is
+// half-precision in the first place.
+func loadHalfAsFloat32(name string, shape tensor.Shape, data []byte, widen func(uint16) float32, backend tensor.Backend) (*tensor.RawTensor, error) {
+	if len(data)%2 != 0 {
+		return nil, fmt.Errorf("tensor %s: half-precision data length %d is not a multiple of 2", name, len(data))
+	}
+
+	n := len(data) / 2
+	if got := shape.NumElements(); got != n {
+		return nil, fmt.Errorf("tensor %s: element count %d does not match shape %v (%d elements)", name, n, shape, got)
+	}
+
+	raw, err := tensor.NewRaw(shape, tensor.Float32, backend.Device())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create tensor: %w", err)
+	}
+
+	out := raw.AsFloat32()
+	for i := range n {
+		out[i] = widen(binary.LittleEndian.Uint16(data[i*2:]))
+	}
 
 	return raw, nil
 }

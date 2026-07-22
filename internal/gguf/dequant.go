@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+
+	"github.com/born-ml/born/internal/half"
 )
 
 // Dequantize преобразует quantized данные в float32.
@@ -92,7 +94,7 @@ func dequantizeUnquantized(data []byte, dtype GGMLType, numElements int) ([]floa
 	case GGMLTypeF16:
 		for i := 0; i < numElements; i++ {
 			h := binary.LittleEndian.Uint16(data[i*2:])
-			result[i] = Float16ToFloat32(h)
+			result[i] = half.Float16ToFloat32(h)
 		}
 
 	case GGMLTypeI8:
@@ -117,40 +119,6 @@ func dequantizeUnquantized(data []byte, dtype GGMLType, numElements int) ([]floa
 	return result, nil
 }
 
-// Float16ToFloat32 конвертирует half precision (IEEE 754) в float32.
-func Float16ToFloat32(h uint16) float32 {
-	// Extract sign, exponent, and mantissa.
-	sign := (h >> 15) & 0x1
-	exp := (h >> 10) & 0x1F
-	mant := h & 0x3FF
-
-	var result uint32
-
-	switch exp {
-	case 0:
-		if mant == 0 {
-			// Zero.
-			result = uint32(sign) << 31
-		} else {
-			// Subnormal F16: value = (-1)^sign * 2^(-14) * (mant / 1024).
-			// Convert directly without normalization to avoid uint16 underflow.
-			f := float64(mant) / 1024.0 * math.Pow(2, -14)
-			if sign == 1 {
-				f = -f
-			}
-			return float32(f)
-		}
-	case 0x1F:
-		// Inf or NaN.
-		result = (uint32(sign) << 31) | 0x7F800000 | (uint32(mant) << 13)
-	default:
-		// Normal number.
-		result = (uint32(sign) << 31) | (uint32(exp+127-15) << 23) | (uint32(mant) << 13)
-	}
-
-	return math.Float32frombits(result)
-}
-
 // Q4_0: 32 elements per block, 4 bits per element.
 // Structure: half d (2 bytes), uint8_t qs[16] (16 bytes).
 // Formula: x[i] = d * (q[i] - 8) where q[i] is 4-bit value.
@@ -160,7 +128,7 @@ func dequantizeBlockQ4_0(data []byte) ([]float32, error) {
 	}
 
 	// Read scale factor (half precision).
-	d := Float16ToFloat32(binary.LittleEndian.Uint16(data[0:2]))
+	d := half.Float16ToFloat32(binary.LittleEndian.Uint16(data[0:2]))
 
 	// Read quantized values (4 bits each, 2 per byte).
 	result := make([]float32, 32)
@@ -187,8 +155,8 @@ func dequantizeBlockQ4_1(data []byte) ([]float32, error) {
 		return nil, fmt.Errorf("insufficient data for Q4_1 block: need 20 bytes, got %d", len(data))
 	}
 
-	d := Float16ToFloat32(binary.LittleEndian.Uint16(data[0:2]))
-	m := Float16ToFloat32(binary.LittleEndian.Uint16(data[2:4]))
+	d := half.Float16ToFloat32(binary.LittleEndian.Uint16(data[0:2]))
+	m := half.Float16ToFloat32(binary.LittleEndian.Uint16(data[2:4]))
 
 	result := make([]float32, 32)
 	for i := 0; i < 16; i++ {
@@ -213,7 +181,7 @@ func dequantizeBlockQ5_0(data []byte) ([]float32, error) {
 		return nil, fmt.Errorf("insufficient data for Q5_0 block: need 22 bytes, got %d", len(data))
 	}
 
-	d := Float16ToFloat32(binary.LittleEndian.Uint16(data[0:2]))
+	d := half.Float16ToFloat32(binary.LittleEndian.Uint16(data[0:2]))
 	qh := binary.LittleEndian.Uint32(data[2:6])
 
 	result := make([]float32, 32)
@@ -243,8 +211,8 @@ func dequantizeBlockQ5_1(data []byte) ([]float32, error) {
 		return nil, fmt.Errorf("insufficient data for Q5_1 block: need 24 bytes, got %d", len(data))
 	}
 
-	d := Float16ToFloat32(binary.LittleEndian.Uint16(data[0:2]))
-	m := Float16ToFloat32(binary.LittleEndian.Uint16(data[2:4]))
+	d := half.Float16ToFloat32(binary.LittleEndian.Uint16(data[0:2]))
+	m := half.Float16ToFloat32(binary.LittleEndian.Uint16(data[2:4]))
 	qh := binary.LittleEndian.Uint32(data[4:8])
 
 	result := make([]float32, 32)
@@ -273,7 +241,7 @@ func dequantizeBlockQ8_0(data []byte) ([]float32, error) {
 		return nil, fmt.Errorf("insufficient data for Q8_0 block: need 34 bytes, got %d", len(data))
 	}
 
-	d := Float16ToFloat32(binary.LittleEndian.Uint16(data[0:2]))
+	d := half.Float16ToFloat32(binary.LittleEndian.Uint16(data[0:2]))
 
 	result := make([]float32, 32)
 	for i := 0; i < 32; i++ {
@@ -297,7 +265,7 @@ func dequantizeBlockQ8_1(data []byte) ([]float32, error) {
 		return nil, fmt.Errorf("insufficient data for Q8_1 block: need 36 bytes, got %d", len(data))
 	}
 
-	d := Float16ToFloat32(binary.LittleEndian.Uint16(data[0:2]))
+	d := half.Float16ToFloat32(binary.LittleEndian.Uint16(data[0:2]))
 
 	// NOTE: s (data[2:4]) = sum(qs)*d is a precomputed dot-product accelerator;
 	// it is intentionally not used in element-wise dequantization.
@@ -349,8 +317,8 @@ func dequantizeBlockQ4_K(data []byte) ([]float32, error) {
 		return nil, fmt.Errorf("insufficient data for Q4_K block: need 144 bytes, got %d", len(data))
 	}
 
-	d := float64(Float16ToFloat32(binary.LittleEndian.Uint16(data[0:2])))
-	dmin := float64(Float16ToFloat32(binary.LittleEndian.Uint16(data[2:4])))
+	d := float64(half.Float16ToFloat32(binary.LittleEndian.Uint16(data[0:2])))
+	dmin := float64(half.Float16ToFloat32(binary.LittleEndian.Uint16(data[2:4])))
 
 	// scales[12] at bytes 4..15, indexed as q[0..11] by getScaleMinK4.
 	q := data[4:16]
@@ -408,8 +376,8 @@ func dequantizeBlockQ5_K(data []byte) ([]float32, error) {
 		return nil, fmt.Errorf("insufficient data for Q5_K block: need 176 bytes, got %d", len(data))
 	}
 
-	d := float64(Float16ToFloat32(binary.LittleEndian.Uint16(data[0:2])))
-	dmin := float64(Float16ToFloat32(binary.LittleEndian.Uint16(data[2:4])))
+	d := float64(half.Float16ToFloat32(binary.LittleEndian.Uint16(data[0:2])))
+	dmin := float64(half.Float16ToFloat32(binary.LittleEndian.Uint16(data[2:4])))
 
 	// scales[12] at bytes 4..15 — same get_scale_min_k4 layout as Q4_K.
 	q := data[4:16]
@@ -489,7 +457,7 @@ func dequantizeBlockQ6_K(data []byte) ([]float32, error) {
 		return nil, fmt.Errorf("insufficient data for Q6_K block: need 210 bytes, got %d", len(data))
 	}
 
-	d := Float16ToFloat32(binary.LittleEndian.Uint16(data[208:210]))
+	d := half.Float16ToFloat32(binary.LittleEndian.Uint16(data[208:210]))
 	result := make([]float32, 256)
 
 	// Two passes of 128 elements each, matching the GGML reference loop structure.

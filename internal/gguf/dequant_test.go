@@ -4,33 +4,9 @@ import (
 	"encoding/binary"
 	"math"
 	"testing"
+
+	"github.com/born-ml/born/internal/half"
 )
-
-// TestFloat16ToFloat32 tests IEEE 754 half precision conversion.
-func TestFloat16ToFloat32(t *testing.T) {
-	tests := []struct {
-		name string
-		h    uint16
-		want float32
-	}{
-		{"zero", 0x0000, 0.0},
-		{"one", 0x3C00, 1.0},
-		{"minus_one", 0xBC00, -1.0},
-		{"two", 0x4000, 2.0},
-		{"half", 0x3800, 0.5},
-		{"max_normal", 0x7BFF, 65504.0},
-		{"min_positive_normal", 0x0400, 6.103515625e-05},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := Float16ToFloat32(tt.h)
-			if math.Abs(float64(got-tt.want)) > 1e-6 {
-				t.Errorf("Float16ToFloat32(0x%04X) = %v, want %v", tt.h, got, tt.want)
-			}
-		})
-	}
-}
 
 // TestDequantizeF32 tests identity operation for F32 type.
 func TestDequantizeF32(t *testing.T) {
@@ -771,7 +747,7 @@ func TestDequantizeBlockQ8_1(t *testing.T) {
 	}
 
 	// Correct formula: x[i] = d * qs[i].
-	d := Float16ToFloat32(0x2E66)
+	d := half.Float16ToFloat32(0x2E66)
 
 	for i := 0; i < 32; i++ {
 		expected := d * float32(i+1)

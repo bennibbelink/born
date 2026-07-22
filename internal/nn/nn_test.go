@@ -8,6 +8,7 @@ import (
 	"github.com/born-ml/born/internal/backend/cpu"
 	"github.com/born-ml/born/internal/nn"
 	"github.com/born-ml/born/internal/tensor"
+	"github.com/born-ml/born/internal/tolerance"
 )
 
 // Helper to check if values are approximately equal.
@@ -436,6 +437,200 @@ func TestMSELoss(t *testing.T) {
 	// Check no trainable parameters
 	if len(mse.Parameters()) != 0 {
 		t.Error("MSE loss should have no parameters")
+	}
+}
+
+// TestConv2D_StateDict_WithBias tests StateDict for Conv2D with bias.
+func TestConv2D_StateDict_WithBias(t *testing.T) {
+	backend := autodiff.New(cpu.New())
+
+	layer := nn.NewConv2D(1, 6, 5, 5, 1, 0, true, backend)
+
+	stateDict := layer.StateDict()
+
+	if _, ok := stateDict["weight"]; !ok {
+		t.Error("StateDict should contain 'weight'")
+	}
+	if _, ok := stateDict["bias"]; !ok {
+		t.Error("StateDict should contain 'bias'")
+	}
+}
+
+// TestConv2D_StateDict_NoBias tests StateDict for Conv2D without bias.
+func TestConv2D_StateDict_NoBias(t *testing.T) {
+	backend := autodiff.New(cpu.New())
+
+	layer := nn.NewConv2D(3, 16, 3, 3, 1, 1, false, backend)
+
+	stateDict := layer.StateDict()
+
+	if _, ok := stateDict["weight"]; !ok {
+		t.Error("StateDict should contain 'weight'")
+	}
+	if _, ok := stateDict["bias"]; ok {
+		t.Error("StateDict should not contain 'bias' for layer without bias")
+	}
+}
+
+// TestConv2D_LoadStateDict_RoundTrip tests full save/load round trip.
+func TestConv2D_LoadStateDict_RoundTrip(t *testing.T) {
+	backend := autodiff.New(cpu.New())
+
+	layer := nn.NewConv2D(1, 2, 3, 3, 1, 0, true, backend)
+
+	stateDict := layer.StateDict()
+
+	layer2 := nn.NewConv2D(1, 2, 3, 3, 1, 0, true, backend)
+	if err := layer2.LoadStateDict(stateDict); err != nil {
+		t.Fatalf("LoadStateDict failed: %v", err)
+	}
+
+	// Verify weights were copied correctly
+	origWeight := layer.StateDict()["weight"].AsFloat32()
+	loadedWeight := layer2.StateDict()["weight"].AsFloat32()
+	tol := &tolerance.Tolerance[float32]{
+		TolType: tolerance.Abs,
+		Abs:     0.00,
+	}
+	if err := tolerance.AssertAllApproxEqual(origWeight, loadedWeight, tol); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify bias was copied correctly
+	origBias := layer.StateDict()["bias"].AsFloat32()
+	loadedBias := layer2.StateDict()["bias"].AsFloat32()
+	if err := tolerance.AssertAllApproxEqual(origBias, loadedBias, tol); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestConv2D_LoadStateDict_RoundTrip_NoBias tests round trip for no-bias layer.
+func TestConv2D_LoadStateDict_RoundTrip_NoBias(t *testing.T) {
+	backend := autodiff.New(cpu.New())
+
+	layer := nn.NewConv2D(3, 16, 3, 3, 1, 1, false, backend)
+	stateDict := layer.StateDict()
+
+	layer2 := nn.NewConv2D(3, 16, 3, 3, 1, 1, false, backend)
+	if err := layer2.LoadStateDict(stateDict); err != nil {
+		t.Fatalf("LoadStateDict failed: %v", err)
+	}
+
+	origWeight := layer.StateDict()["weight"].AsFloat32()
+	loadedWeight := layer2.StateDict()["weight"].AsFloat32()
+	tol := &tolerance.Tolerance[float32]{
+		TolType: tolerance.Abs,
+		Abs:     0.00,
+	}
+	if err := tolerance.AssertAllApproxEqual(origWeight, loadedWeight, tol); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestConv2D_LoadStateDict_WrongShape tests error on shape mismatch.
+func TestConv2D_LoadStateDict_WrongShape(t *testing.T) {
+	backend := autodiff.New(cpu.New())
+
+	layer := nn.NewConv2D(1, 2, 3, 3, 1, 0, true, backend)
+
+	// Create a state dict with wrong weight shape
+	weightTensor, _ := tensor.FromSlice([]float32{1, 2, 3, 4}, tensor.Shape{2, 1, 2, 1}, backend)
+	stateDict := map[string]*tensor.RawTensor{
+		"weight": weightTensor.Raw(),
+		"bias":   layer.StateDict()["bias"],
+	}
+
+	if err := layer.LoadStateDict(stateDict); err == nil {
+		t.Error("Expected error for weight shape mismatch, got nil")
+	}
+}
+
+// TestConv2D_LoadStateDict_WrongBiasShape tests error on bias shape mismatch.
+func TestConv2D_LoadStateDict_WrongBiasShape(t *testing.T) {
+	backend := autodiff.New(cpu.New())
+
+	layer := nn.NewConv2D(1, 2, 3, 3, 1, 0, true, backend)
+
+	biasTensor, _ := tensor.FromSlice([]float32{1, 2, 3}, tensor.Shape{3}, backend)
+	stateDict := map[string]*tensor.RawTensor{
+		"weight": layer.StateDict()["weight"],
+		"bias":   biasTensor.Raw(),
+	}
+
+	if err := layer.LoadStateDict(stateDict); err == nil {
+		t.Error("Expected error for bias shape mismatch, got nil")
+	}
+}
+
+// TestConv2D_LoadStateDict_MissingWeight tests error on missing weight.
+func TestConv2D_LoadStateDict_MissingWeight(t *testing.T) {
+	backend := autodiff.New(cpu.New())
+
+	layer := nn.NewConv2D(1, 2, 3, 3, 1, 0, true, backend)
+
+	stateDict := map[string]*tensor.RawTensor{
+		"bias": layer.StateDict()["bias"],
+	}
+
+	if err := layer.LoadStateDict(stateDict); err == nil {
+		t.Error("Expected error for missing weight, got nil")
+	}
+}
+
+// TestConv2D_LoadStateDict_MissingBias tests error when layer expects bias but dict has none.
+func TestConv2D_LoadStateDict_MissingBias(t *testing.T) {
+	backend := autodiff.New(cpu.New())
+
+	layer := nn.NewConv2D(1, 2, 3, 3, 1, 0, true, backend)
+
+	stateDict := map[string]*tensor.RawTensor{
+		"weight": layer.StateDict()["weight"],
+	}
+
+	if err := layer.LoadStateDict(stateDict); err == nil {
+		t.Error("Expected error for missing bias, got nil")
+	}
+}
+
+// TestConv2D_LoadStateDict_WrongDtype tests error on weight dtype mismatch.
+func TestConv2D_LoadStateDict_WrongDtype(t *testing.T) {
+	backend := autodiff.New(cpu.New())
+
+	layer := nn.NewConv2D(1, 2, 3, 3, 1, 0, true, backend)
+
+	weightTensor, _ := tensor.FromSlice(
+		make([]float64, 2*1*3*3),
+		tensor.Shape{2, 1, 3, 3},
+		backend,
+	)
+	stateDict := map[string]*tensor.RawTensor{
+		"weight": weightTensor.Raw(),
+		"bias":   layer.StateDict()["bias"],
+	}
+
+	if err := layer.LoadStateDict(stateDict); err == nil {
+		t.Error("Expected error for weight dtype mismatch, got nil")
+	}
+}
+
+// TestConv2D_LoadStateDict_WrongBiasDtype tests error on bias dtype mismatch.
+func TestConv2D_LoadStateDict_WrongBiasDtype(t *testing.T) {
+	backend := autodiff.New(cpu.New())
+
+	layer := nn.NewConv2D(1, 2, 3, 3, 1, 0, true, backend)
+
+	biasTensor, _ := tensor.FromSlice(
+		make([]float64, 2),
+		tensor.Shape{2},
+		backend,
+	)
+	stateDict := map[string]*tensor.RawTensor{
+		"weight": layer.StateDict()["weight"],
+		"bias":   biasTensor.Raw(),
+	}
+
+	if err := layer.LoadStateDict(stateDict); err == nil {
+		t.Error("Expected error for bias dtype mismatch, got nil")
 	}
 }
 

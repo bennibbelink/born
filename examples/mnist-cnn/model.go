@@ -2,9 +2,10 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
-	"github.com/born-ml/born/internal/nn"
-	"github.com/born-ml/born/internal/tensor"
+	"github.com/born-ml/born/nn"
+	"github.com/born-ml/born/tensor"
 )
 
 // MNISTNetCNN is a LeNet-5 style convolutional neural network for MNIST classification.
@@ -146,4 +147,67 @@ func (m *MNISTNetCNN[B]) String() string {
 		"ReLU()",
 		m.pool2.String(),
 	)
+}
+
+// StateDict returns the model's state as a map of parameter names to raw tensors.
+//
+// Keys are prefixed with the layer name (e.g., "conv1.weight", "fc3.bias").
+func (m *MNISTNetCNN[B]) StateDict() map[string]*tensor.RawTensor {
+	state := make(map[string]*tensor.RawTensor)
+
+	for k, v := range m.conv1.StateDict() {
+		state["conv1."+k] = v
+	}
+	for k, v := range m.conv2.StateDict() {
+		state["conv2."+k] = v
+	}
+	for k, v := range m.fc1.StateDict() {
+		state["fc1."+k] = v
+	}
+	for k, v := range m.fc2.StateDict() {
+		state["fc2."+k] = v
+	}
+	for k, v := range m.fc3.StateDict() {
+		state["fc3."+k] = v
+	}
+	return state
+}
+
+// LoadStateDict loads the model's state from a map of parameter names to raw tensors.
+//
+// Keys must match the format returned by StateDict (e.g., "conv1.weight", "fc3.bias").
+func (m *MNISTNetCNN[B]) LoadStateDict(stateDict map[string]*tensor.RawTensor) error {
+	conv1State := make(map[string]*tensor.RawTensor)
+	conv2State := make(map[string]*tensor.RawTensor)
+	fc1State := make(map[string]*tensor.RawTensor)
+	fc2State := make(map[string]*tensor.RawTensor)
+	fc3State := make(map[string]*tensor.RawTensor)
+
+	for k, v := range stateDict {
+		if rest, ok := strings.CutPrefix(k, "conv1."); ok {
+			conv1State[rest] = v
+		} else if rest, ok := strings.CutPrefix(k, "conv2."); ok {
+			conv2State[rest] = v
+		} else if rest, ok := strings.CutPrefix(k, "fc1."); ok {
+			fc1State[rest] = v
+		} else if rest, ok := strings.CutPrefix(k, "fc2."); ok {
+			fc2State[rest] = v
+		} else if rest, ok := strings.CutPrefix(k, "fc3."); ok {
+			fc3State[rest] = v
+		}
+	}
+
+	if err := m.conv1.LoadStateDict(conv1State); err != nil {
+		return err
+	}
+	if err := m.conv2.LoadStateDict(conv2State); err != nil {
+		return err
+	}
+	if err := m.fc1.LoadStateDict(fc1State); err != nil {
+		return err
+	}
+	if err := m.fc2.LoadStateDict(fc2State); err != nil {
+		return err
+	}
+	return m.fc3.LoadStateDict(fc3State)
 }

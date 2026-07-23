@@ -127,7 +127,7 @@ func LoadFromHuggingFace(modelPath string) (Tokenizer, error) {
 	case HFTypeBPE:
 		return LoadBPEFromHuggingFace(tokenizerPath)
 	case HFTypeWordPiece:
-		return nil, fmt.Errorf("WordPiece tokenizer not yet implemented")
+		return LoadWordPieceFromHuggingFace(tokenizerPath)
 	case HFTypeUnigram:
 		return nil, fmt.Errorf("unigram tokenizer not yet implemented (requires SentencePiece)")
 	default:

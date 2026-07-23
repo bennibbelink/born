@@ -225,10 +225,24 @@ func TestLoadFromHuggingFace_WordPiece(t *testing.T) {
 
 	config := map[string]interface{}{
 		"model": map[string]interface{}{
-			"type": "WordPiece",
+			"type":                      "WordPiece",
+			"unk_token":                 "[UNK]",
+			"continuing_subword_prefix": "##",
+			"max_input_chars_per_word":  100,
 			"vocab": map[string]int{
-				"a": 0,
+				"[UNK]": 0,
+				"[CLS]": 1,
+				"[SEP]": 2,
+				"[PAD]": 3,
+				"hello": 4,
+				"world": 5,
 			},
+		},
+		"added_tokens": []map[string]interface{}{
+			{"id": 0, "content": "[UNK]", "special": true},
+			{"id": 1, "content": "[CLS]", "special": true},
+			{"id": 2, "content": "[SEP]", "special": true},
+			{"id": 3, "content": "[PAD]", "special": true},
 		},
 	}
 
@@ -237,10 +251,18 @@ func TestLoadFromHuggingFace_WordPiece(t *testing.T) {
 	err = os.WriteFile(tokenizerPath, data, 0o600)
 	require.NoError(t, err)
 
-	_, err = LoadFromHuggingFace(tmpDir)
-	// WordPiece not implemented yet.
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not yet implemented")
+	tok, err := LoadFromHuggingFace(tmpDir)
+	require.NoError(t, err)
+	require.NotNil(t, tok)
+	assert.Equal(t, 6, tok.VocabSize())
+	assert.Equal(t, int32(1), tok.BosToken())
+	assert.Equal(t, int32(2), tok.EosToken())
+	assert.Equal(t, int32(3), tok.PadToken())
+	assert.Equal(t, int32(0), tok.UnkToken())
+
+	tokens, err := tok.Encode("hello")
+	require.NoError(t, err)
+	assert.Equal(t, []int32{4}, tokens)
 }
 
 func TestHFTokenizerType_Constants(t *testing.T) {

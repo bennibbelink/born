@@ -82,6 +82,7 @@ type SafeTensorsReader struct {
 	header     SafeTensorsHeader
 	headerSize uint64
 	dataOffset int64 // Offset where tensor data starts
+	fileSize   int64 // Total file size, for bounds-checking header offsets
 }
 
 // NewSafeTensorsReader creates a new SafeTensors reader.
@@ -90,6 +91,17 @@ func NewSafeTensorsReader(path string) (*SafeTensorsReader, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+
+	// Record the real file size, so tensor byte ranges from the (untrusted)
+	// header can be bounds-checked against it before any allocation or read.
+	// Stat on a descriptor opened a line earlier fails only if that descriptor
+	// is revoked underneath us, which no portable test can arrange, so this
+	// error arm stays uncovered on purpose.
+	fileInfo, err := file.Stat()
+	if err != nil {
+		_ = file.Close() // Best effort close on error
+		return nil, fmt.Errorf("failed to stat file: %w", err)
 	}
 
 	// Read header size (8 bytes, little-endian uint64)
@@ -127,6 +139,7 @@ func NewSafeTensorsReader(path string) (*SafeTensorsReader, error) {
 		header:     header,
 		headerSize: headerSize,
 		dataOffset: dataOffset,
+		fileSize:   fileInfo.Size(),
 	}, nil
 }
 
@@ -168,26 +181,24 @@ func (r *SafeTensorsReader) ReadTensorData(name string) ([]byte, error) {
 		return nil, err
 	}
 
-	// Calculate absolute offsets
-	start := r.dataOffset + info.DataOffsets[0]
-	end := r.dataOffset + info.DataOffsets[1]
-	size := end - start
-
-	// Validate offsets
-	if size < 0 {
-		return nil, fmt.Errorf("invalid data offsets for tensor %s: [%d, %d]",
-			name, info.DataOffsets[0], info.DataOffsets[1])
+	// The header is untrusted, so validate the byte range it claims before
+	// allocating or reading. Offsets are relative to the data section; compare
+	// against its length rather than absolute file positions to avoid int64
+	// overflow on a malicious end offset.
+	start, end := info.DataOffsets[0], info.DataOffsets[1]
+	dataLen := r.fileSize - r.dataOffset
+	if start < 0 || end < start || end > dataLen {
+		return nil, fmt.Errorf("tensor %s: data offsets [%d, %d] out of range for data section of %d bytes",
+			name, start, end, dataLen)
 	}
 
-	// Seek to start
-	if _, err := r.file.Seek(start, io.SeekStart); err != nil {
-		return nil, fmt.Errorf("failed to seek to tensor data: %w", err)
-	}
-
-	// Read data
-	data := make([]byte, size)
-	if _, err := io.ReadFull(r.file, data); err != nil {
-		return nil, fmt.Errorf("failed to read tensor data: %w", err)
+	// ReadAt reads from an explicit offset without moving a shared file cursor,
+	// so concurrent reads on the same reader cannot interleave. The bounds check
+	// above compares against the size sampled at open, so a file that shrinks
+	// after that still has to be caught here.
+	data := make([]byte, end-start)
+	if _, err := r.file.ReadAt(data, r.dataOffset+start); err != nil {
+		return nil, fmt.Errorf("failed to read tensor data for %s: %w", name, err)
 	}
 
 	return data, nil
@@ -240,6 +251,13 @@ func (r *SafeTensorsReader) LoadTensor(name string, backend tensor.Backend) (*te
 	data, err := r.ReadTensorData(name)
 	if err != nil {
 		return nil, err
+	}
+
+	// The header is untrusted: a data section shorter than the shape and dtype
+	// demand would otherwise be copied verbatim, silently zero-filling the rest.
+	if want := shape.NumElements() * dtype.Size(); len(data) != want {
+		return nil, fmt.Errorf("tensor %s: data length %d does not match shape %v (dtype %s, %d bytes)",
+			name, len(data), shape, info.DType, want)
 	}
 
 	// Create RawTensor

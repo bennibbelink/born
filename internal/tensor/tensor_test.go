@@ -3,6 +3,7 @@ package tensor
 import (
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -118,12 +119,34 @@ func TestShapeValidation(t *testing.T) {
 		{3, 0},
 		{-1},
 		{3, -4},
+		{4, 1 << 62},             // Element count overflows on the last dimension.
+		{1 << 40, 1 << 40, 1024}, // Overflows part-way, after a valid prefix.
 	}
 
 	for _, s := range invalidShapes {
 		if err := s.Validate(); err == nil {
 			t.Errorf("Shape%v.Validate() should fail but didn't", s)
 		}
+	}
+}
+
+// TestShapeValidateOverflow pins what the element-count guard is for: every
+// dimension is positive, so the dimension check alone accepts the shape, yet
+// the product wraps and NumElements reports a count that would size a buffer
+// bearing no relation to the shape.
+func TestShapeValidateOverflow(t *testing.T) {
+	s := Shape{4, 1 << 62} // 4 * 2^62 == 2^64, which wraps to 0.
+
+	if got := s.NumElements(); got != 0 {
+		t.Fatalf("Shape%v.NumElements() = %d, want 0 (the wrapped product this guards)", s, got)
+	}
+
+	err := s.Validate()
+	if err == nil {
+		t.Fatalf("Shape%v.Validate() = nil, want an overflow error", s)
+	}
+	if !strings.Contains(err.Error(), "overflows") {
+		t.Errorf("Shape%v.Validate() error = %q, want it to name the overflow", s, err)
 	}
 }
 

@@ -18,6 +18,9 @@ import (
 // Defined as a constant to satisfy goconst (used in setParameter and tests).
 const bornNameEmbeddingWeight = "embedding.weight"
 
+// bornNameLMHeadWeight is the canonical Born name for the LM head weight.
+const bornNameLMHeadWeight = "lm_head.weight"
+
 // LoadGGUF loads a LLaMA model from a GGUF file.
 //
 // It reads architecture metadata, constructs a Model with the correct shape,
@@ -90,9 +93,14 @@ func LoadGGUF[B tensor.Backend](path string, backend B, opts ...Option[B]) (*Mod
 	// Handle tied embeddings: most LLaMA models omit lm_head.weight from GGUF
 	// because it shares weights with embed_tokens (tie_word_embeddings=true).
 	if !loader.lmHeadLoaded {
-		embedData := model.Embed.Weight.Tensor().Raw().AsFloat32()
-		headData := model.Head.Weight().Tensor().Raw().AsFloat32()
-		copy(headData, embedData)
+		if model.cpuEmbedData != nil {
+			// Embedding is on CPU; share the same slice for tied LM head.
+			model.cpuLMHeadData = model.cpuEmbedData
+		} else {
+			embedData := model.Embed.Weight.Tensor().Raw().AsFloat32()
+			headData := model.Head.Weight().Tensor().Raw().AsFloat32()
+			copy(headData, embedData)
+		}
 	}
 
 	return model, nil
@@ -128,8 +136,17 @@ func (wl *weightLoader[B]) loadAll(file *gguf.File) error {
 	return nil
 }
 
+// gpuMaxBufferSize is the minimum guaranteed max buffer size per the WebGPU
+// spec (256 MB). Tensors larger than this are kept on CPU when using GPU.
+const gpuMaxBufferSize = 256 * 1024 * 1024
+
 // loadTensor dequantizes a single GGUF tensor and copies it into the matching
 // Born model parameter identified by bornName.
+//
+// When the backend is GPU and the tensor is the embedding or LM head weight
+// (typically the largest: vocab_size × hidden_size × 4 bytes), the data is
+// kept in CPU memory (cpuEmbedData / cpuLMHeadData) instead of uploading to
+// GPU. This avoids exceeding WebGPU's 256 MB max buffer limit.
 func (wl *weightLoader[B]) loadTensor(ggufName, bornName string) error {
 	float32Data, shape, err := wl.converter.Convert(ggufName)
 	if err != nil {
@@ -139,14 +156,29 @@ func (wl *weightLoader[B]) loadTensor(ggufName, bornName string) error {
 	tShape := make(tensor.Shape, len(shape))
 	copy(tShape, shape)
 
-	// Create a temporary RawTensor to hold the dequantized data.
+	// Keep embedding / LM head on CPU when using GPU and the tensor is too large.
+	if wl.backend.Device() != tensor.CPU && len(float32Data)*4 > gpuMaxBufferSize {
+		switch bornName {
+		case bornNameEmbeddingWeight:
+			wl.model.cpuEmbedData = float32Data
+			wl.model.cpuHiddenSize = wl.model.Config.HiddenSize
+			return nil
+		case bornNameLMHeadWeight:
+			wl.lmHeadLoaded = true
+			wl.model.cpuLMHeadData = float32Data
+			return nil
+		default:
+			return fmt.Errorf("tensor %q (%d bytes) exceeds GPU max buffer size (%d bytes)", bornName, len(float32Data)*4, gpuMaxBufferSize)
+		}
+	}
+
+	// Normal path: create a tensor on the backend and copy data.
 	raw, err := tensor.NewRaw(tShape, tensor.Float32, wl.backend.Device())
 	if err != nil {
 		return fmt.Errorf("create raw: %w", err)
 	}
 	copy(raw.AsFloat32(), float32Data)
 
-	// Route the tensor to the correct model parameter based on its Born name.
 	return wl.setParameter(bornName, raw)
 }
 
@@ -162,7 +194,7 @@ func (wl *weightLoader[B]) setParameter(bornName string, raw *tensor.RawTensor) 
 	case bornName == "norm.weight":
 		return copyToParam(m.Norm.Gamma, raw)
 
-	case bornName == "lm_head.weight":
+	case bornName == bornNameLMHeadWeight:
 		wl.lmHeadLoaded = true
 		return copyToLinearWeight(m.Head, raw)
 

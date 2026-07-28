@@ -245,10 +245,85 @@ func (r *GGUFReader) readMetadataValue(valueType GGUFType) (interface{}, error) 
 		err := binary.Read(r.file, binary.LittleEndian, &v)
 		return v, err
 	case GGUFTypeArray:
-		// For simplicity, skip arrays for now
-		return nil, fmt.Errorf("array type not yet supported")
+		return r.readArray()
 	default:
 		return nil, fmt.Errorf("unknown value type: %d", valueType)
+	}
+}
+
+// readArray reads a GGUF array: element type (uint32) + length (uint64) + elements.
+func (r *GGUFReader) readArray() (interface{}, error) {
+	var elemType GGUFType
+	if err := binary.Read(r.file, binary.LittleEndian, &elemType); err != nil {
+		return nil, fmt.Errorf("read array element type: %w", err)
+	}
+
+	var length uint64
+	if err := binary.Read(r.file, binary.LittleEndian, &length); err != nil {
+		return nil, fmt.Errorf("read array length: %w", err)
+	}
+
+	if length > 100_000_000 {
+		return nil, fmt.Errorf("array too large: %d elements", length)
+	}
+
+	if elemType == GGUFTypeString {
+		return r.readStringArray(length)
+	}
+	return r.readNumericArray(elemType, length)
+}
+
+// readStringArray reads length GGUF strings.
+func (r *GGUFReader) readStringArray(length uint64) ([]string, error) {
+	arr := make([]string, int(length)) //nolint:gosec // G115: length bounded to 100M by readArray caller
+	for i := range arr {
+		s, err := r.readString()
+		if err != nil {
+			return nil, err
+		}
+		arr[i] = s
+	}
+	return arr, nil
+}
+
+// readBinaryArray reads length fixed-width values of type T using encoding/binary.
+func readBinaryArray[T any](src io.Reader, length uint64) ([]T, error) {
+	arr := make([]T, int(length)) //nolint:gosec // G115: length bounded to 100M by readArray caller
+	for i := range arr {
+		if err := binary.Read(src, binary.LittleEndian, &arr[i]); err != nil {
+			return nil, err
+		}
+	}
+	return arr, nil
+}
+
+// readNumericArray reads an array of fixed-width numeric or bool elements.
+func (r *GGUFReader) readNumericArray(elemType GGUFType, length uint64) (interface{}, error) {
+	switch elemType {
+	case GGUFTypeUint8:
+		return readBinaryArray[uint8](r.file, length)
+	case GGUFTypeInt8:
+		return readBinaryArray[int8](r.file, length)
+	case GGUFTypeUint16:
+		return readBinaryArray[uint16](r.file, length)
+	case GGUFTypeInt16:
+		return readBinaryArray[int16](r.file, length)
+	case GGUFTypeUint32:
+		return readBinaryArray[uint32](r.file, length)
+	case GGUFTypeInt32:
+		return readBinaryArray[int32](r.file, length)
+	case GGUFTypeUint64:
+		return readBinaryArray[uint64](r.file, length)
+	case GGUFTypeInt64:
+		return readBinaryArray[int64](r.file, length)
+	case GGUFTypeFloat32:
+		return readBinaryArray[float32](r.file, length)
+	case GGUFTypeFloat64:
+		return readBinaryArray[float64](r.file, length)
+	case GGUFTypeBool:
+		return readBinaryArray[bool](r.file, length)
+	default:
+		return nil, fmt.Errorf("unsupported array element type: %d", elemType)
 	}
 }
 

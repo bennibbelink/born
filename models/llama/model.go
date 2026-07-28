@@ -300,6 +300,14 @@ type Model[B tensor.Backend] struct {
 	Config Config
 
 	backend B
+
+	// CPU-side fallback for large embedding/LM-head weights that exceed
+	// WebGPU's max buffer size (256 MB). When non-nil, embedding lookup
+	// and LM head matmul are computed on CPU; only the small hidden-state
+	// tensors cross the CPU↔GPU boundary.
+	cpuEmbedData  []float32 // [vocab_size * hidden_size]
+	cpuLMHeadData []float32 // [vocab_size * hidden_size] (may alias cpuEmbedData for tied)
+	cpuHiddenSize int
 }
 
 // NewModel creates an uninitialised LLaMA Model with random weights.
@@ -344,6 +352,103 @@ func (m *Model[B]) Release() {
 	release(m.Head.Parameters())
 }
 
+// EnableCPUEmbedding moves the embedding and LM head weights to CPU memory.
+//
+// This is needed when the vocab is too large for a single WebGPU buffer
+// (> 256 MB). After calling this, Forward() will:
+//   - Look up token embeddings on CPU (fast: O(seq × hidden) index copy)
+//   - Transfer the small hidden tensor [batch, seq, hidden] to GPU
+//   - Run transformer layers on GPU
+//   - Transfer final hidden states back to CPU
+//   - Compute LM head matmul on CPU (only last position's logits)
+//
+// Safe to call once after LoadGGUF. No-op if already enabled.
+// Note: LoadGGUF automatically calls this when the backend is GPU and the
+// embedding exceeds 256 MB, so manual calls are usually unnecessary.
+func (m *Model[B]) EnableCPUEmbedding() {
+	if m.cpuEmbedData != nil {
+		return
+	}
+	embedRaw := m.Embed.Weight.Tensor().Raw()
+	m.cpuEmbedData = append([]float32(nil), embedRaw.AsFloat32()...)
+	m.cpuHiddenSize = m.Config.HiddenSize
+
+	// Extract LM head weight (may be tied with embedding).
+	headRaw := m.Head.Weight().Tensor().Raw()
+	headData := headRaw.AsFloat32()
+	if len(headData) == len(m.cpuEmbedData) {
+		m.cpuLMHeadData = m.cpuEmbedData // tied
+	} else {
+		m.cpuLMHeadData = append([]float32(nil), headData...)
+	}
+}
+
+// CPUEmbedData returns the CPU-side embedding data, or nil if not enabled.
+func (m *Model[B]) CPUEmbedData() []float32 {
+	return m.cpuEmbedData
+}
+
+// cpuEmbeddingLookup indexes token IDs into the CPU embedding weight slice and
+// returns a [batch, seq, hidden] tensor on the backend device.
+func (m *Model[B]) cpuEmbeddingLookup(input *tensor.RawTensor) *tensor.Tensor[float32, B] {
+	tokenIDs := input.AsInt32()
+	inShape := input.Shape()
+	batch := inShape[0]
+	seq := inShape[1]
+	hs := m.cpuHiddenSize
+
+	lookup := make([]float32, batch*seq*hs)
+	for i := 0; i < batch*seq; i++ {
+		tok := int(tokenIDs[i])
+		if tok >= 0 && tok < m.Config.VocabSize {
+			copy(lookup[i*hs:(i+1)*hs], m.cpuEmbedData[tok*hs:(tok+1)*hs])
+		}
+	}
+
+	// Create tensor on the backend's device (GPU if applicable).
+	// Using m.backend.Device() instead of tensor.CPU ensures the WebGPU
+	// backend creates a proper GPU buffer with the data, rather than a
+	// CPU tensor that might not transfer correctly.
+	raw, err := tensor.NewRaw(tensor.Shape{batch, seq, hs}, tensor.Float32, m.backend.Device())
+	if err != nil {
+		panic(fmt.Sprintf("llama: cpu embedding: %v", err))
+	}
+	copy(raw.AsFloat32(), lookup)
+	return tensor.New[float32, B](raw, m.backend)
+}
+
+// cpuLMHead computes logits for the last sequence position on CPU.
+// Panics if batch != 1 (only single-batch CPU LM head is supported).
+func (m *Model[B]) cpuLMHead(hidden *tensor.Tensor[float32, B], seqLen int) *tensor.RawTensor {
+	batch := hidden.Shape()[0]
+	if batch != 1 {
+		panic(fmt.Sprintf("llama: cpu lm head only supports batch=1, got %d", batch))
+	}
+
+	// AsFloat32 triggers lazy GPU realization (calls Data() internally).
+	hData := hidden.Raw().AsFloat32()
+	hs := m.Config.HiddenSize
+	vocab := m.Config.VocabSize
+	lastRow := hData[(seqLen-1)*hs : seqLen*hs]
+
+	logits := make([]float32, vocab)
+	for j := 0; j < vocab; j++ {
+		var sum float32
+		wOff := j * hs
+		for k := 0; k < hs; k++ {
+			sum += lastRow[k] * m.cpuLMHeadData[wOff+k]
+		}
+		logits[j] = sum
+	}
+
+	raw, err := tensor.NewRaw(tensor.Shape{1, 1, vocab}, tensor.Float32, tensor.CPU)
+	if err != nil {
+		panic(fmt.Sprintf("llama: cpu lm head: %v", err))
+	}
+	copy(raw.AsFloat32(), logits)
+	return raw
+}
+
 // Forward performs a forward pass and returns logits.
 //
 // This method satisfies the generate.LLMModel interface.
@@ -357,23 +462,25 @@ func (m *Model[B]) Release() {
 //     tokens already in the cache for incremental decoding).
 //
 // Returns logits [batch, seq_len, vocab_size] as a *tensor.RawTensor.
+// When CPU embedding is enabled, returns [1, 1, vocab_size] (last position only)
+// since the sampler only needs the last token's logits.
 func (m *Model[B]) Forward(
 	input *tensor.RawTensor,
 	cache generate.KVCache,
 	startPos int,
 ) *tensor.RawTensor {
-	// Convert raw int32 input to typed tensor for embedding lookup.
-	inputTyped := tensor.New[int32, B](input, m.backend)
-
-	// Token embeddings: [batch, seq, hidden_size].
-	hidden := m.Embed.Forward(inputTyped)
+	// Embedding lookup: CPU fallback for large vocabs, or normal GPU path.
+	var hidden *tensor.Tensor[float32, B]
+	if m.cpuEmbedData != nil {
+		hidden = m.cpuEmbeddingLookup(input)
+	} else {
+		hidden = m.Embed.Forward(tensor.New[int32, B](input, m.backend))
+	}
 
 	// Cast cache to the model-specific per-layer cache type.
 	var modelCache *ModelCache[B]
-	if cache != nil {
-		if typed, ok := cache.(*ModelCache[B]); ok {
-			modelCache = typed
-		}
+	if typed, ok := cache.(*ModelCache[B]); ok {
+		modelCache = typed
 	}
 
 	// Pass through all transformer layers, providing each with its own KV cache slice.
@@ -391,11 +498,13 @@ func (m *Model[B]) Forward(
 	// LM head: project to vocab logits.
 	shape := hidden.Shape()
 	batch, seqLen := shape[0], shape[1]
-	hidden2D := hidden.Reshape(batch*seqLen, m.Config.HiddenSize)
-	logits2D := m.Head.Forward(hidden2D)
-	logits := logits2D.Reshape(batch, seqLen, m.Config.VocabSize)
 
-	return logits.Raw()
+	if m.cpuLMHeadData != nil {
+		return m.cpuLMHead(hidden, seqLen)
+	}
+
+	logits2D := m.Head.Forward(hidden.Reshape(batch*seqLen, m.Config.HiddenSize))
+	return logits2D.Reshape(batch, seqLen, m.Config.VocabSize).Raw()
 }
 
 // VocabSize returns the vocabulary size.

@@ -1,6 +1,9 @@
 package tensor
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 // Shape represents the dimensions of a tensor.
 type Shape []int
@@ -17,12 +20,20 @@ func (s Shape) NumElements() int {
 	return n
 }
 
-// Validate checks if the shape is valid (all dimensions > 0).
+// Validate checks if the shape is valid: every dimension > 0, and an element
+// count that fits in an int. Shapes are read from model files, so a crafted
+// one can otherwise overflow the NumElements product silently and describe a
+// tensor with no relation to the buffer allocated for it.
 func (s Shape) Validate() error {
+	count := 1
 	for i, dim := range s {
 		if dim <= 0 {
 			return fmt.Errorf("invalid dimension at index %d: %d (must be > 0)", i, dim)
 		}
+		if dim > math.MaxInt/count {
+			return fmt.Errorf("invalid shape %v: element count overflows int at index %d", s, i)
+		}
+		count *= dim
 	}
 	return nil
 }

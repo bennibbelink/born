@@ -73,6 +73,13 @@ func (tb *tensorBuffer) isUnique() bool {
 	return tb.refCount.Load() == 1
 }
 
+// Materializer converts backend-specific tensor data to CPU-resident bytes.
+// Implemented by GPU backends to abstract the GPU→CPU readback path.
+// The returned slice must have length shape.NumElements() * dtype.Size().
+type Materializer interface {
+	Materialize(t *RawTensor) ([]byte, error)
+}
+
 // RawTensor is the low-level tensor representation.
 // It uses reference-counted shared buffers for Copy-on-Write semantics.
 // Supports lazy GPU evaluation: data is transferred from GPU only when Data() is called.
@@ -86,6 +93,7 @@ type RawTensor struct {
 	gpuData         *LazyGPUData  // Lazy GPU data (nil for CPU tensors)
 	gpuPersistDefer bool          // Deferred persistence: applied when gpuData is first set
 	backendData     any           // Opaque backend-owned data (managed by backend, not RawTensor).
+	materializer    Materializer  // Phase 2: backend that can materialize this tensor.
 }
 
 // NewRaw creates a new RawTensor with the given shape and type.
@@ -138,28 +146,55 @@ func (r *RawTensor) ByteSize() int {
 	return r.NumElements() * r.dtype.Size()
 }
 
+// copyReadbackData writes GPU readback bytes into the tensor's CPU buffer,
+// allocating the buffer if necessary. data may be nil for empty results.
+func (r *RawTensor) copyReadbackData(data []byte) {
+	if data == nil {
+		return
+	}
+	if r.buffer == nil {
+		r.buffer = newTensorBuffer(r.NumElements() * r.dtype.Size())
+	}
+	copy(r.buffer.data[r.offset:], data)
+}
+
+// ensureBuffer allocates a zero-filled CPU buffer if one does not exist yet.
+func (r *RawTensor) ensureBuffer() {
+	if r.buffer == nil {
+		r.buffer = newTensorBuffer(r.NumElements() * r.dtype.Size())
+	}
+}
+
 // Data returns the raw byte slice.
 // For lazy GPU tensors, this triggers data transfer from GPU to CPU (expensive!).
 // WARNING: Direct access to underlying memory. Use with caution.
 func (r *RawTensor) Data() []byte {
-	// Lazy GPU realization: transfer data from GPU if not already done
-	if r.gpuData != nil && !r.gpuData.IsRealized() { //nolint:nestif // GPU realization requires nested error handling
+	// Phase 2 path: use Materializer when set for non-CPU tensors (ADR-019).
+	// Both materializer and gpuData reference the same underlying GPU buffer;
+	// whichever path fires first, the other is cleared to prevent double-realization.
+	if r.materializer != nil && r.device != CPU {
+		data, err := r.materializer.Materialize(r)
+		if err != nil {
+			panic("tensor: materializer readback failed: " + err.Error())
+		}
+		r.copyReadbackData(data)
+		// Clear both to prevent double-realization via legacy path.
+		r.materializer = nil
+		r.backendData = nil
+		r.ensureBuffer()
+		return r.buffer.data[r.offset:]
+	}
+
+	// Legacy path: direct LazyGPUData access (Phase 3-4 will remove).
+	if r.gpuData != nil && !r.gpuData.IsRealized() {
 		data, err := r.gpuData.Realize()
 		if err != nil {
 			panic("tensor: failed to realize GPU data: " + err.Error())
 		}
-		if data != nil {
-			// Lazy CPU buffer allocation — only when GPU data is actually read back.
-			if r.buffer == nil {
-				r.buffer = newTensorBuffer(r.NumElements() * r.dtype.Size())
-			}
-			copy(r.buffer.data[r.offset:], data)
-		}
+		r.copyReadbackData(data)
 	}
 	// Lazy CPU buffer allocation for non-GPU tensors that somehow have nil buffer.
-	if r.buffer == nil {
-		r.buffer = newTensorBuffer(r.NumElements() * r.dtype.Size())
-	}
+	r.ensureBuffer()
 	return r.buffer.data[r.offset:]
 }
 
@@ -229,6 +264,13 @@ func (r *RawTensor) BackendData() any {
 // The backend is responsible for lifecycle management of the stored value.
 func (r *RawTensor) SetBackendData(data any) {
 	r.backendData = data
+}
+
+// SetMaterializer registers the backend that can materialize this tensor.
+// Called by GPU backends when creating lazy tensors (Phase 2 of ADR-019).
+// After Data() calls Materialize, the materializer is cleared to avoid double-realization.
+func (r *RawTensor) SetMaterializer(m Materializer) {
+	r.materializer = m
 }
 
 // AsFloat32 interprets the data as []float32.
@@ -325,14 +367,15 @@ func (r *RawTensor) Clone() *RawTensor {
 		r.gpuData.AddRef()
 	}
 	return &RawTensor{
-		buffer:      r.buffer,
-		shape:       r.shape.Clone(),
-		stride:      append([]int(nil), r.stride...),
-		dtype:       r.dtype,
-		device:      r.device,
-		offset:      r.offset,
-		gpuData:     r.gpuData,
-		backendData: r.backendData, // Shared reference; backend manages lifecycle.
+		buffer:       r.buffer,
+		shape:        r.shape.Clone(),
+		stride:       append([]int(nil), r.stride...),
+		dtype:        r.dtype,
+		device:       r.device,
+		offset:       r.offset,
+		gpuData:      r.gpuData,
+		backendData:  r.backendData,  // Shared reference; backend manages lifecycle.
+		materializer: r.materializer, // Shared reference; backend is stateless for this call.
 	}
 }
 

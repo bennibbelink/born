@@ -51,6 +51,12 @@ func (b *Backend) createLazyResult(resultBuf *wgpu.Buffer, bufferSize uint64, sh
 		return nil, err
 	}
 
+	// Phase 1: opaque backend data — both paths reference the same GPU buffer.
+	result.SetBackendData(gpuData) // kept for Phase 1 consumers.
+	// Phase 2: register materializer so Data() can go through the backend-agnostic
+	// path (ADR-019). The old gpuData path remains intact for Phase 3-4.
+	result.SetMaterializer(b)
+
 	return result, nil
 }
 

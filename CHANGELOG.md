@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **ADR-019: Opaque backend data** — removed all GPU knowledge from core tensor package (`internal/tensor/`). `RawTensor` no longer has GPU-specific fields (`gpuData`, `gpuPersistDefer`) or methods (`GPUData`, `SetGPUData`, `ReleaseGPU`, `SetGPUPersistent`, `IsLazy`). GPU data is now managed through opaque `backendData any` field with `Materialize` (readback), `BackendReleaser` (lifecycle), and `Materializer` (lazy evaluation) interfaces. `LazyGPUData` moved to `internal/backend/webgpu/`. Vendored sigmoid SIMD kernel removed from tensor (cpu backend already has `goexperiment.simd` version). `internal/tensor/` now has zero `//go:build` tags, zero platform-specific files — WASM builds without stubs. ([#126](https://github.com/born-ml/born/issues/126))
+
+### Fixed
+
+- **WebGPU flaky tests** — eliminated all timing-dependent assertions (`activeBatchCount`, `IsRealized`) across shared encoder, deferred staging, and encoder batch tests. Replaced with numerical correctness checks. Tests now verify computed values, not internal GPU state
+
 ## [0.9.22] - 2026-08-03
 
 ### Fixed

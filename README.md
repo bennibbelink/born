@@ -60,7 +60,7 @@ prediction := model.Predict(image)
 - **Type Safe** - Generics-powered API for compile-time guarantees
 - **Autodiff** - Automatic differentiation via decorator pattern
 - **Production Ready** - Single binary deployment, fast startup
-- **WebAssembly** - Run inference in browsers natively
+- **WebAssembly** - Run inference in browsers natively (core tensor has zero platform-specific code)
 
 ### GPU Acceleration
 - **WebGPU Backend** - Zero-CGO GPU via [gogpu/wgpu](https://github.com/gogpu/wgpu) (pure Go), 123x MatMul speedup

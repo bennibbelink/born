@@ -21,15 +21,16 @@ Not a PyTorch replacement (different niche). Not an academic tool (production-fi
 - **One language**: research experiments and production code share the same codebase
 - **Type-safe**: `Tensor[float32, *webgpu.Backend]` — errors at compile-time, not runtime
 
-### What Born Does Today (v0.9.0)
+### What Born Does Today (v0.9.22)
 
 - ✅ Train models from scratch on CPU and GPU (HRM model validated)
-- ✅ LLaMA inference from GGUF files (TinyLlama 1.1B verified)
-- ✅ ONNX import (49 operators)
+- ✅ LLaMA inference from GGUF files (TinyLlama 1.1B verified); GGUF-embedded tokenizer
+- ✅ ONNX import (57 operators); SafeTensors with F16/BF16 widening
 - ✅ GPU acceleration: WebGPU/Vulkan via gogpu/wgpu (pure Go, zero CGO)
 - ✅ AVX2 SIMD, cache-tiled MatMul, parallel BatchMatMul
 - ✅ GPU batched dispatch (50→1 submits per forward pass)
 - ✅ Autodiff: all backward ops via forward composition (Burn pattern)
+- ✅ Backend-agnostic core: zero platform tags in tensor package (ADR-019)
 
 ---
 

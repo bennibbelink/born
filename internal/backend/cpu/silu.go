@@ -18,7 +18,7 @@ func (cpu *CPUBackend) SiLU(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Float32:
 		src := x.AsFloat32()
 		dst := result.AsFloat32()
-		if simdSiluFloat32 != nil {
+		if simdSiluFloat32 != nil && len(src) >= simdMinLen {
 			simdSiluFloat32(dst, src)
 		} else {
 			siluScalar(dst, src)
@@ -26,7 +26,7 @@ func (cpu *CPUBackend) SiLU(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Float64:
 		src := x.AsFloat64()
 		dst := result.AsFloat64()
-		if simdSiluFloat64 != nil {
+		if simdSiluFloat64 != nil && len(src) >= simdMinLen {
 			simdSiluFloat64(dst, src)
 		} else {
 			siluScalar(dst, src)

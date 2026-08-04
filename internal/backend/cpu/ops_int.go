@@ -7,7 +7,7 @@ import (
 // Int32 operations
 
 func addInplaceInt32(a, b []int32) {
-	if simdAddInplaceInt32 != nil {
+	if simdAddInplaceInt32 != nil && len(a) >= simdMinLen {
 		simdAddInplaceInt32(a, b)
 		return
 	}
@@ -17,7 +17,7 @@ func addInplaceInt32(a, b []int32) {
 }
 
 func subInplaceInt32(a, b []int32) {
-	if simdSubInplaceInt32 != nil {
+	if simdSubInplaceInt32 != nil && len(a) >= simdMinLen {
 		simdSubInplaceInt32(a, b)
 		return
 	}
@@ -27,7 +27,7 @@ func subInplaceInt32(a, b []int32) {
 }
 
 func mulInplaceInt32(a, b []int32) {
-	if simdMulInplaceInt32 != nil {
+	if simdMulInplaceInt32 != nil && len(a) >= simdMinLen {
 		simdMulInplaceInt32(a, b)
 		return
 	}
@@ -43,7 +43,7 @@ func divInplaceInt32(a, b []int32) {
 }
 
 func addVectorizedInt32(dst, a, b []int32) {
-	if simdAddVectorizedInt32 != nil {
+	if simdAddVectorizedInt32 != nil && len(a) >= simdMinLen {
 		simdAddVectorizedInt32(dst, a, b)
 		return
 	}
@@ -53,7 +53,7 @@ func addVectorizedInt32(dst, a, b []int32) {
 }
 
 func subVectorizedInt32(dst, a, b []int32) {
-	if simdSubVectorizedInt32 != nil {
+	if simdSubVectorizedInt32 != nil && len(a) >= simdMinLen {
 		simdSubVectorizedInt32(dst, a, b)
 		return
 	}
@@ -63,7 +63,7 @@ func subVectorizedInt32(dst, a, b []int32) {
 }
 
 func mulVectorizedInt32(dst, a, b []int32) {
-	if simdMulVectorizedInt32 != nil {
+	if simdMulVectorizedInt32 != nil && len(a) >= simdMinLen {
 		simdMulVectorizedInt32(dst, a, b)
 		return
 	}
@@ -171,7 +171,7 @@ func transposeInt32(dst, src []int32, shape tensor.Shape, axes []int) {
 // Int64 operations
 
 func addInplaceInt64(a, b []int64) {
-	if simdAddInplaceInt64 != nil {
+	if simdAddInplaceInt64 != nil && len(a) >= simdMinLen {
 		simdAddInplaceInt64(a, b)
 		return
 	}
@@ -181,7 +181,7 @@ func addInplaceInt64(a, b []int64) {
 }
 
 func subInplaceInt64(a, b []int64) {
-	if simdSubInplaceInt64 != nil {
+	if simdSubInplaceInt64 != nil && len(a) >= simdMinLen {
 		simdSubInplaceInt64(a, b)
 		return
 	}
@@ -191,7 +191,7 @@ func subInplaceInt64(a, b []int64) {
 }
 
 func mulInplaceInt64(a, b []int64) {
-	if simdMulInplaceInt64 != nil {
+	if simdMulInplaceInt64 != nil && len(a) >= simdMinLen {
 		simdMulInplaceInt64(a, b)
 		return
 	}
@@ -207,7 +207,7 @@ func divInplaceInt64(a, b []int64) {
 }
 
 func addVectorizedInt64(dst, a, b []int64) {
-	if simdAddVectorizedInt64 != nil {
+	if simdAddVectorizedInt64 != nil && len(a) >= simdMinLen {
 		simdAddVectorizedInt64(dst, a, b)
 		return
 	}
@@ -217,7 +217,7 @@ func addVectorizedInt64(dst, a, b []int64) {
 }
 
 func subVectorizedInt64(dst, a, b []int64) {
-	if simdSubVectorizedInt64 != nil {
+	if simdSubVectorizedInt64 != nil && len(a) >= simdMinLen {
 		simdSubVectorizedInt64(dst, a, b)
 		return
 	}
@@ -227,7 +227,7 @@ func subVectorizedInt64(dst, a, b []int64) {
 }
 
 func mulVectorizedInt64(dst, a, b []int64) {
-	if simdMulVectorizedInt64 != nil {
+	if simdMulVectorizedInt64 != nil && len(a) >= simdMinLen {
 		simdMulVectorizedInt64(dst, a, b)
 		return
 	}

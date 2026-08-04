@@ -110,72 +110,53 @@ func (cpu *CPUBackend) MeanDim(x *tensor.RawTensor, dim int, keepDim bool) *tens
 }
 
 // sumDimFloat32 performs dimension reduction for float32 tensors.
+//
+// Uses outer/dim/inner block iteration instead of per-element N-D coordinate
+// decomposition. Each output position corresponds to one (outer, inner) pair;
+// the loop over the reduced dimension is the innermost accumulator.
+//
+// Layout (row-major): flat index = outer*dimSize*inner + d*inner + i
+// where outer iterates the leading dimensions, d the reduced dim, i the trailing.
 func sumDimFloat32(data, result []float32, shape tensor.Shape, dim int) {
-	// Initialize result to zero
+	// Initialize result to zero.
 	for i := range result {
 		result[i] = 0
 	}
 
-	// Calculate strides for input
-	strides := shape.ComputeStrides()
-	numElements := shape.NumElements()
+	dimSize := shape[dim]
+	inner, outer := innerOuter(shape, dim)
 
-	// Calculate output strides (with reduced dimension size = 1)
-	outShape := shape.Clone()
-	outShape[dim] = 1
-	outStrides := outShape.ComputeStrides()
-
-	// Iterate over all input elements
-	for i := 0; i < numElements; i++ {
-		// Compute multi-dimensional index
-		outIdx := 0
-		temp := i
-		for d := 0; d < len(shape); d++ {
-			coord := temp / strides[d]
-			temp %= strides[d]
-
-			// For the reduced dimension, we always use coordinate 0 in output
-			if d != dim {
-				outIdx += coord * outStrides[d]
+	for o := 0; o < outer; o++ {
+		for i := 0; i < inner; i++ {
+			outIdx := o*inner + i
+			base := o * dimSize * inner
+			for d := 0; d < dimSize; d++ {
+				result[outIdx] += data[base+d*inner+i]
 			}
 		}
-
-		result[outIdx] += data[i]
 	}
 }
 
 // sumDimFloat64 performs dimension reduction for float64 tensors.
+//
+// Uses the same outer/dim/inner block iteration as sumDimFloat32.
 func sumDimFloat64(data, result []float64, shape tensor.Shape, dim int) {
-	// Initialize result to zero
+	// Initialize result to zero.
 	for i := range result {
 		result[i] = 0
 	}
 
-	// Calculate strides for input
-	strides := shape.ComputeStrides()
-	numElements := shape.NumElements()
+	dimSize := shape[dim]
+	inner, outer := innerOuter(shape, dim)
 
-	// Calculate output strides (with reduced dimension size = 1)
-	outShape := shape.Clone()
-	outShape[dim] = 1
-	outStrides := outShape.ComputeStrides()
-
-	// Iterate over all input elements
-	for i := 0; i < numElements; i++ {
-		// Compute multi-dimensional index
-		outIdx := 0
-		temp := i
-		for d := 0; d < len(shape); d++ {
-			coord := temp / strides[d]
-			temp %= strides[d]
-
-			// For the reduced dimension, we always use coordinate 0 in output
-			if d != dim {
-				outIdx += coord * outStrides[d]
+	for o := 0; o < outer; o++ {
+		for i := 0; i < inner; i++ {
+			outIdx := o*inner + i
+			base := o * dimSize * inner
+			for d := 0; d < dimSize; d++ {
+				result[outIdx] += data[base+d*inner+i]
 			}
 		}
-
-		result[outIdx] += data[i]
 	}
 }
 
@@ -191,7 +172,7 @@ func (cpu *CPUBackend) Sum(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Float32:
 		src := x.AsFloat32()
 		dst := result.AsFloat32()
-		if simdSumFloat32 != nil {
+		if simdSumFloat32 != nil && len(src) >= simdMinLen {
 			simdSumFloat32(dst, src)
 		} else {
 			sumScalar(dst, src)
@@ -199,7 +180,7 @@ func (cpu *CPUBackend) Sum(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Float64:
 		src := x.AsFloat64()
 		dst := result.AsFloat64()
-		if simdSumFloat64 != nil {
+		if simdSumFloat64 != nil && len(src) >= simdMinLen {
 			simdSumFloat64(dst, src)
 		} else {
 			sumScalar(dst, src)
@@ -207,7 +188,7 @@ func (cpu *CPUBackend) Sum(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Int32:
 		src := x.AsInt32()
 		dst := result.AsInt32()
-		if simdSumInt32 != nil {
+		if simdSumInt32 != nil && len(src) >= simdMinLen {
 			simdSumInt32(dst, src)
 		} else {
 			sumScalar(dst, src)
@@ -215,7 +196,7 @@ func (cpu *CPUBackend) Sum(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Int64:
 		src := x.AsInt64()
 		dst := result.AsInt64()
-		if simdSumInt64 != nil {
+		if simdSumInt64 != nil && len(src) >= simdMinLen {
 			simdSumInt64(dst, src)
 		} else {
 			sumScalar(dst, src)

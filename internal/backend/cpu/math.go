@@ -240,7 +240,7 @@ func (cpu *CPUBackend) Sign(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Uint8:
 		dst := result.AsUint8()
 		src := x.AsUint8()
-		if simdSignUint8 != nil {
+		if simdSignUint8 != nil && len(src) >= simdMinLen {
 			simdSignUint8(dst, src)
 		} else {
 			signUint8(dst, src)
@@ -248,7 +248,7 @@ func (cpu *CPUBackend) Sign(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Int32:
 		dst := result.AsInt32()
 		src := x.AsInt32()
-		if simdSignInt32 != nil {
+		if simdSignInt32 != nil && len(src) >= simdMinLen {
 			simdSignInt32(dst, src)
 		} else {
 			signInts(dst, src)
@@ -256,7 +256,7 @@ func (cpu *CPUBackend) Sign(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Int64:
 		dst := result.AsInt64()
 		src := x.AsInt64()
-		if simdSignInt64 != nil {
+		if simdSignInt64 != nil && len(src) >= simdMinLen {
 			simdSignInt64(dst, src)
 		} else {
 			signInts(dst, src)
@@ -264,7 +264,7 @@ func (cpu *CPUBackend) Sign(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Float32:
 		dst := result.AsFloat32()
 		src := x.AsFloat32()
-		if simdSignFloat32 != nil {
+		if simdSignFloat32 != nil && len(src) >= simdMinLen {
 			simdSignFloat32(dst, src)
 		} else {
 			signFloats(dst, src)
@@ -272,7 +272,7 @@ func (cpu *CPUBackend) Sign(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Float64:
 		dst := result.AsFloat64()
 		src := x.AsFloat64()
-		if simdSignFloat64 != nil {
+		if simdSignFloat64 != nil && len(src) >= simdMinLen {
 			simdSignFloat64(dst, src)
 		} else {
 			signFloats(dst, src)

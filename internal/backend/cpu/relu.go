@@ -17,7 +17,7 @@ func (cpu *CPUBackend) ReLU(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Float32:
 		src := x.AsFloat32()
 		dst := result.AsFloat32()
-		if simdReluFloat32 != nil {
+		if simdReluFloat32 != nil && len(src) >= simdMinLen {
 			simdReluFloat32(dst, src)
 		} else {
 			reluScalar(dst, src)
@@ -25,7 +25,7 @@ func (cpu *CPUBackend) ReLU(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Float64:
 		src := x.AsFloat64()
 		dst := result.AsFloat64()
-		if simdReluFloat64 != nil {
+		if simdReluFloat64 != nil && len(src) >= simdMinLen {
 			simdReluFloat64(dst, src)
 		} else {
 			reluScalar(dst, src)

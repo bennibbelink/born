@@ -7,7 +7,7 @@ import (
 // Float64 operations follow the same pattern as float32
 
 func addInplaceFloat64(a, b []float64) {
-	if simdAddInplaceFloat64 != nil {
+	if simdAddInplaceFloat64 != nil && len(a) >= simdMinLen {
 		simdAddInplaceFloat64(a, b)
 		return
 	}
@@ -17,7 +17,7 @@ func addInplaceFloat64(a, b []float64) {
 }
 
 func subInplaceFloat64(a, b []float64) {
-	if simdSubInplaceFloat64 != nil {
+	if simdSubInplaceFloat64 != nil && len(a) >= simdMinLen {
 		simdSubInplaceFloat64(a, b)
 		return
 	}
@@ -27,7 +27,7 @@ func subInplaceFloat64(a, b []float64) {
 }
 
 func mulInplaceFloat64(a, b []float64) {
-	if simdMulInplaceFloat64 != nil {
+	if simdMulInplaceFloat64 != nil && len(a) >= simdMinLen {
 		simdMulInplaceFloat64(a, b)
 		return
 	}
@@ -37,7 +37,7 @@ func mulInplaceFloat64(a, b []float64) {
 }
 
 func divInplaceFloat64(a, b []float64) {
-	if simdDivInplaceFloat64 != nil {
+	if simdDivInplaceFloat64 != nil && len(a) >= simdMinLen {
 		simdDivInplaceFloat64(a, b)
 		return
 	}
@@ -47,7 +47,7 @@ func divInplaceFloat64(a, b []float64) {
 }
 
 func addVectorizedFloat64(dst, a, b []float64) {
-	if simdAddVectorizedFloat64 != nil {
+	if simdAddVectorizedFloat64 != nil && len(a) >= simdMinLen {
 		simdAddVectorizedFloat64(dst, a, b)
 		return
 	}
@@ -57,7 +57,7 @@ func addVectorizedFloat64(dst, a, b []float64) {
 }
 
 func subVectorizedFloat64(dst, a, b []float64) {
-	if simdSubVectorizedFloat64 != nil {
+	if simdSubVectorizedFloat64 != nil && len(a) >= simdMinLen {
 		simdSubVectorizedFloat64(dst, a, b)
 		return
 	}
@@ -67,7 +67,7 @@ func subVectorizedFloat64(dst, a, b []float64) {
 }
 
 func mulVectorizedFloat64(dst, a, b []float64) {
-	if simdMulVectorizedFloat64 != nil {
+	if simdMulVectorizedFloat64 != nil && len(a) >= simdMinLen {
 		simdMulVectorizedFloat64(dst, a, b)
 		return
 	}
@@ -77,7 +77,7 @@ func mulVectorizedFloat64(dst, a, b []float64) {
 }
 
 func divVectorizedFloat64(dst, a, b []float64) {
-	if simdDivVectorizedFloat64 != nil {
+	if simdDivVectorizedFloat64 != nil && len(a) >= simdMinLen {
 		simdDivVectorizedFloat64(dst, a, b)
 		return
 	}

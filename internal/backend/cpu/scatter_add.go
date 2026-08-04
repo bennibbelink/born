@@ -107,15 +107,15 @@ func validateScatterAdd(dest *tensor.RawTensor, dim int, indices, src *tensor.Ra
 	return dim
 }
 
-// scatterCoords decomposes a flat element index into N-D coordinates using strides.
-func scatterCoords(flatIdx, ndim int, strides []int) []int {
-	coords := make([]int, ndim)
+// decomposeCoords decomposes a flat index into N-D coordinates in-place using
+// strides. coords must be pre-allocated with length ndim. This avoids the
+// per-element make([]int, ndim) that was the primary allocation hot-path.
+func decomposeCoords(flatIdx int, strides, coords []int) {
 	rem := flatIdx
-	for d := 0; d < ndim; d++ {
+	for d := range coords {
 		coords[d] = rem / strides[d]
 		rem %= strides[d]
 	}
-	return coords
 }
 
 // scatterIndexFlat computes a flat index from coords and strides.
@@ -140,10 +140,14 @@ func scatterDstFlat(coords []int, idx, dim, ndim int, dstStrides []int) int {
 	return dstIdx
 }
 
+// scatterAddCPUFloat32 accumulates src into dst via scatter indices for float32.
+// coords is pre-allocated once outside the element loop to eliminate per-element
+// heap allocation.
 func scatterAddCPUFloat32(dst, src []float32, indices []int32, dim, numElements, ndim int,
 	dstShape tensor.Shape, srcStrides, dstStrides, indexStrides []int) {
+	coords := make([]int, ndim)
 	for i := 0; i < numElements; i++ {
-		coords := scatterCoords(i, ndim, srcStrides)
+		decomposeCoords(i, srcStrides, coords)
 		idx := int(indices[scatterIndexFlat(coords, ndim, indexStrides)])
 		if idx < 0 || idx >= dstShape[dim] {
 			panic(fmt.Sprintf("scatteradd: index %d out of bounds [0, %d)", idx, dstShape[dim]))
@@ -152,10 +156,14 @@ func scatterAddCPUFloat32(dst, src []float32, indices []int32, dim, numElements,
 	}
 }
 
+// scatterAddCPUFloat64 accumulates src into dst via scatter indices for float64.
+// coords is pre-allocated once outside the element loop to eliminate per-element
+// heap allocation.
 func scatterAddCPUFloat64(dst, src []float64, indices []int32, dim, numElements, ndim int,
 	dstShape tensor.Shape, srcStrides, dstStrides, indexStrides []int) {
+	coords := make([]int, ndim)
 	for i := 0; i < numElements; i++ {
-		coords := scatterCoords(i, ndim, srcStrides)
+		decomposeCoords(i, srcStrides, coords)
 		idx := int(indices[scatterIndexFlat(coords, ndim, indexStrides)])
 		if idx < 0 || idx >= dstShape[dim] {
 			panic(fmt.Sprintf("scatteradd: index %d out of bounds [0, %d)", idx, dstShape[dim]))
@@ -164,10 +172,14 @@ func scatterAddCPUFloat64(dst, src []float64, indices []int32, dim, numElements,
 	}
 }
 
+// scatterAddCPUInt32 accumulates src into dst via scatter indices for int32.
+// coords is pre-allocated once outside the element loop to eliminate per-element
+// heap allocation.
 func scatterAddCPUInt32(dst, src, indices []int32, dim, numElements, ndim int,
 	dstShape tensor.Shape, srcStrides, dstStrides, indexStrides []int) {
+	coords := make([]int, ndim)
 	for i := 0; i < numElements; i++ {
-		coords := scatterCoords(i, ndim, srcStrides)
+		decomposeCoords(i, srcStrides, coords)
 		idx := int(indices[scatterIndexFlat(coords, ndim, indexStrides)])
 		if idx < 0 || idx >= dstShape[dim] {
 			panic(fmt.Sprintf("scatteradd: index %d out of bounds [0, %d)", idx, dstShape[dim]))
@@ -176,10 +188,14 @@ func scatterAddCPUInt32(dst, src, indices []int32, dim, numElements, ndim int,
 	}
 }
 
+// scatterAddCPUInt64 accumulates src into dst via scatter indices for int64.
+// coords is pre-allocated once outside the element loop to eliminate per-element
+// heap allocation.
 func scatterAddCPUInt64(dst, src []int64, indices []int32, dim, numElements, ndim int,
 	dstShape tensor.Shape, srcStrides, dstStrides, indexStrides []int) {
+	coords := make([]int, ndim)
 	for i := 0; i < numElements; i++ {
-		coords := scatterCoords(i, ndim, srcStrides)
+		decomposeCoords(i, srcStrides, coords)
 		idx := int(indices[scatterIndexFlat(coords, ndim, indexStrides)])
 		if idx < 0 || idx >= dstShape[dim] {
 			panic(fmt.Sprintf("scatteradd: index %d out of bounds [0, %d)", idx, dstShape[dim]))

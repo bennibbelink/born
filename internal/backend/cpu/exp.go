@@ -18,7 +18,7 @@ func (cpu *CPUBackend) Exp(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Float32:
 		src := x.AsFloat32()
 		dst := result.AsFloat32()
-		if simdExpFloat32 != nil {
+		if simdExpFloat32 != nil && len(src) >= simdMinLen {
 			simdExpFloat32(dst, src)
 		} else {
 			expScalar(dst, src)
@@ -26,7 +26,7 @@ func (cpu *CPUBackend) Exp(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Float64:
 		src := x.AsFloat64()
 		dst := result.AsFloat64()
-		if simdExpFloat64 != nil {
+		if simdExpFloat64 != nil && len(src) >= simdMinLen {
 			simdExpFloat64(dst, src)
 		} else {
 			expScalar(dst, src)

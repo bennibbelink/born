@@ -172,7 +172,7 @@ func (cpu *CPUBackend) Sum(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Float32:
 		src := x.AsFloat32()
 		dst := result.AsFloat32()
-		if simdSumFloat32 != nil {
+		if simdSumFloat32 != nil && len(src) >= simdMinLen {
 			simdSumFloat32(dst, src)
 		} else {
 			sumScalar(dst, src)
@@ -180,7 +180,7 @@ func (cpu *CPUBackend) Sum(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Float64:
 		src := x.AsFloat64()
 		dst := result.AsFloat64()
-		if simdSumFloat64 != nil {
+		if simdSumFloat64 != nil && len(src) >= simdMinLen {
 			simdSumFloat64(dst, src)
 		} else {
 			sumScalar(dst, src)
@@ -188,7 +188,7 @@ func (cpu *CPUBackend) Sum(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Int32:
 		src := x.AsInt32()
 		dst := result.AsInt32()
-		if simdSumInt32 != nil {
+		if simdSumInt32 != nil && len(src) >= simdMinLen {
 			simdSumInt32(dst, src)
 		} else {
 			sumScalar(dst, src)
@@ -196,7 +196,7 @@ func (cpu *CPUBackend) Sum(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Int64:
 		src := x.AsInt64()
 		dst := result.AsInt64()
-		if simdSumInt64 != nil {
+		if simdSumInt64 != nil && len(src) >= simdMinLen {
 			simdSumInt64(dst, src)
 		} else {
 			sumScalar(dst, src)

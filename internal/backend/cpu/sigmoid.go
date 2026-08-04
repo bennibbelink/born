@@ -18,7 +18,7 @@ func (cpu *CPUBackend) Sigmoid(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Float32:
 		src := x.AsFloat32()
 		dst := result.AsFloat32()
-		if simdSigmoidFloat32 != nil {
+		if simdSigmoidFloat32 != nil && len(src) >= simdMinLen {
 			simdSigmoidFloat32(dst, src)
 		} else {
 			sigmoidScalar(dst, src)
@@ -26,7 +26,7 @@ func (cpu *CPUBackend) Sigmoid(x *tensor.RawTensor) *tensor.RawTensor {
 	case tensor.Float64:
 		src := x.AsFloat64()
 		dst := result.AsFloat64()
-		if simdSigmoidFloat64 != nil {
+		if simdSigmoidFloat64 != nil && len(src) >= simdMinLen {
 			simdSigmoidFloat64(dst, src)
 		} else {
 			sigmoidScalar(dst, src)

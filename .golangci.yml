@@ -188,6 +188,14 @@ linters:
       - path: internal/backend/cpu/(scalar|comparison|boolean|activation|math|reduce|shape|conversion)\.go
         linters:
           - dupl         # Expected duplication for type-specific implementations (float32, float64, int32, int64, uint8, bool)
+          - gocognit     # Multi-dtype dispatch functions (sign, abs) are inherently complex
+          - gocyclo      # Multi-dtype dispatch functions with SIMD threshold guards are inherently cyclomatic
+          - cyclop       # Multi-dtype dispatch functions with SIMD threshold guards are inherently cyclomatic
+
+      # SIMD-accelerated activation/unary ops - structurally similar dispatch boilerplate per op
+      - path: internal/backend/cpu/(relu|sigmoid|silu|exp)\.go
+        linters:
+          - dupl         # Each op dispatches to its own SIMD kernel; structural similarity is intentional
 
       # SIMD backend kernels - structurally similar by nature (type-specific SIMD ISA variants)
       - path: internal/backend/cpu/reduce_simd_amd64\.go

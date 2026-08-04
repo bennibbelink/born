@@ -239,7 +239,6 @@ func castFromUint8(result, x *tensor.RawTensor, toDtype tensor.DataType) {
 // Cast from Bool
 // ============================================================================
 
-//nolint:gocognit,gocyclo,cyclop // Type-specific casting logic for 5 target types (float32, float64, int32, int64, uint8)
 func castFromBool(result, x *tensor.RawTensor, toDtype tensor.DataType) {
 	src := x.AsBool()
 

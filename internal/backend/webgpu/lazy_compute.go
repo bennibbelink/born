@@ -288,9 +288,6 @@ func (b *Backend) runMatMulLazy(a, other *tensor.RawTensor) (*tensor.RawTensor, 
 		return nil, &lazyError{msg: "matmul: shape mismatch"}
 	}
 
-	shader := b.compileShader("matmul", matmulShader)
-	entry := b.getOrCreatePipeline("matmul", shader, bglBinary)
-
 	// Get or create GPU buffers for inputs. Cached CPU tensors reuse the same
 	// GPU buffer. Lazy GPU tensors return their result buffer directly (no copy).
 	inputA := b.getOrCreateInputBuffer(a)
@@ -319,15 +316,34 @@ func (b *Backend) runMatMulLazy(a, other *tensor.RawTensor) (*tensor.RawTensor, 
 		return nil, fmt.Errorf("runMatMulLazy: create result buffer: %w", err)
 	}
 
-	// Create params buffer. Ownership transfers to addComputePassToEncoder.
-	params := make([]byte, 16)
-	putUint32LE(params[0:4], M)
-	putUint32LE(params[4:8], K)
-	putUint32LE(params[8:12], N)
-	bufferParams := b.createUniformBuffer(params)
+	// Params: M, K, N plus one u32 pad to meet std140 16-byte alignment.
+	paramBytes := make([]byte, 16)
+	putUint32LE(paramBytes[0:4], M)
+	putUint32LE(paramBytes[4:8], K)
+	putUint32LE(paramBytes[8:12], N)
+	bufferParams := b.createUniformBuffer(paramBytes)
 
 	sizeA := uint64(a.ByteSize())         //nolint:gosec // G115: integer overflow conversion int -> uint64
 	sizeOther := uint64(other.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
+
+	var workgroupsX, workgroupsY uint32
+	var entry pipelineEntry
+
+	if b.subgroupsEnabled {
+		// Subgroup cooperative K-reduction: one workgroup(32 threads) per output element.
+		// Dispatch (N, M, 1) — col along X, row along Y.
+		shader := b.compileShader("matmul_subgroup", matmulSubgroupShader)
+		entry = b.getOrCreatePipeline("matmul_subgroup", shader, bglBinary)
+		workgroupsX = N
+		workgroupsY = M
+	} else {
+		// Scalar K-loop: 16×16 tile dispatch.
+		shader := b.compileShader("matmul", matmulShader)
+		entry = b.getOrCreatePipeline("matmul", shader, bglBinary)
+		workgroupsX = (N + 15) / 16
+		workgroupsY = (M + 15) / 16
+	}
+
 	bg := b.createBindGroupFromBuffers(entry.layout, []bindGroupBuffer{
 		bufBinding(inputA.buffer, sizeA),
 		bufBinding(inputOther.buffer, sizeOther),
@@ -336,9 +352,6 @@ func (b *Backend) runMatMulLazy(a, other *tensor.RawTensor) (*tensor.RawTensor, 
 	})
 	// NO defer bg.Release() — ownership transfers to encoder batch via lazyResources.
 
-	// 2D workgroups (16x16 per workgroup)
-	workgroupsX := (N + 15) / 16
-	workgroupsY := (M + 15) / 16
 	return b.addComputePassToEncoder(entry.pipeline, bg, workgroupsX, workgroupsY, 1, bufferResult, resultSize, resultShape, tensor.Float32,
 		lazyResources{
 			buffers:    append(transientBufs, bufferParams),
@@ -489,9 +502,6 @@ func (b *Backend) runBatchMatMulLazy(a, other *tensor.RawTensor) (*tensor.RawTen
 		resultShape = tensor.Shape{shapeA[0], shapeA[1], int(M), int(N)}
 	}
 
-	shader := b.compileShader("batchMatMul", batchMatMulShader)
-	entry := b.getOrCreatePipeline("batchMatMul", shader, bglBinary)
-
 	// Get or create GPU buffers for inputs. Cached CPU tensors reuse the same buffer.
 	inputA := b.getOrCreateInputBuffer(a)
 	inputB := b.getOrCreateInputBuffer(other)
@@ -519,15 +529,34 @@ func (b *Backend) runBatchMatMulLazy(a, other *tensor.RawTensor) (*tensor.RawTen
 	}
 
 	// Create uniform buffer for params. Ownership transfers to addComputePassToEncoder.
-	params := make([]byte, 16)
-	putUint32LE(params[0:4], batch)
-	putUint32LE(params[4:8], M)
-	putUint32LE(params[8:12], K)
-	putUint32LE(params[12:16], N)
-	bufferParams := b.createUniformBuffer(params)
+	paramBytes := make([]byte, 16)
+	putUint32LE(paramBytes[0:4], batch)
+	putUint32LE(paramBytes[4:8], M)
+	putUint32LE(paramBytes[8:12], K)
+	putUint32LE(paramBytes[12:16], N)
+	bufferParams := b.createUniformBuffer(paramBytes)
 
 	sizeA := uint64(a.ByteSize())     //nolint:gosec // G115: integer overflow conversion int -> uint64
 	sizeB := uint64(other.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
+
+	var workgroupsX, workgroupsY uint32
+	var entry pipelineEntry
+
+	if b.subgroupsEnabled {
+		// Subgroup cooperative K-reduction: one workgroup(32 threads) per output element.
+		// Dispatch (N, M, batch) — col along X, row along Y, batch along Z.
+		shader := b.compileShader("batchMatMul_subgroup", batchMatMulSubgroupShader)
+		entry = b.getOrCreatePipeline("batchMatMul_subgroup", shader, bglBinary)
+		workgroupsX = N
+		workgroupsY = M
+	} else {
+		// Scalar K-loop: (N+7)/8 × (M+7)/8 × batch dispatch.
+		shader := b.compileShader("batchMatMul", batchMatMulShader)
+		entry = b.getOrCreatePipeline("batchMatMul", shader, bglBinary)
+		workgroupsX = (N + 7) / 8
+		workgroupsY = (M + 7) / 8
+	}
+
 	bg := b.createBindGroupFromBuffers(entry.layout, []bindGroupBuffer{
 		bufBinding(inputA.buffer, sizeA),
 		bufBinding(inputB.buffer, sizeB),
@@ -536,9 +565,6 @@ func (b *Backend) runBatchMatMulLazy(a, other *tensor.RawTensor) (*tensor.RawTen
 	})
 	// NO defer bg.Release() — ownership transfers to encoder batch via lazyResources.
 
-	// Dispatch: (N+7)/8 x (M+7)/8 x batch
-	workgroupsX := (N + 7) / 8
-	workgroupsY := (M + 7) / 8
 	return b.addComputePassToEncoder(entry.pipeline, bg, workgroupsX, workgroupsY, batch, bufferResult, resultSize, resultShape, tensor.Float32,
 		lazyResources{
 			buffers:    append(transientBufs, bufferParams),
@@ -620,9 +646,6 @@ func (b *Backend) runSoftmaxLazy(input *tensor.RawTensor) (*tensor.RawTensor, er
 	batchSize := uint32(input.Shape()[0])  //nolint:gosec // G115: safe, tensor dims are small positive ints
 	numClasses := uint32(input.Shape()[1]) //nolint:gosec // G115: safe, tensor dims are small positive ints
 
-	shader := b.compileShader("softmax", softmaxShader)
-	entry := b.getOrCreatePipeline("softmax", shader, bglUnary)
-
 	// Get or create GPU buffer for input. Cached CPU tensors reuse the same buffer.
 	inputResult := b.getOrCreateInputBuffer(input)
 
@@ -644,10 +667,27 @@ func (b *Backend) runSoftmaxLazy(input *tensor.RawTensor) (*tensor.RawTensor, er
 	}
 
 	// Create uniform buffer for params. Ownership transfers to addComputePassToEncoder.
-	params := make([]byte, 16)
-	putUint32LE(params[0:4], batchSize)
-	putUint32LE(params[4:8], numClasses)
-	bufferParams := b.createUniformBuffer(params)
+	paramBytes := make([]byte, 16)
+	putUint32LE(paramBytes[0:4], batchSize)
+	putUint32LE(paramBytes[4:8], numClasses)
+	bufferParams := b.createUniformBuffer(paramBytes)
+
+	var workgroups uint32
+	var entry pipelineEntry
+
+	if b.subgroupsEnabled {
+		// Subgroup cooperative reduction: one workgroup (32 lanes) per row.
+		// Dispatch (batchSize, 1, 1) — each workgroup handles exactly one row.
+		shader := b.compileShader("softmax_subgroup", softmaxSubgroupShader)
+		entry = b.getOrCreatePipeline("softmax_subgroup", shader, bglUnary)
+		workgroups = batchSize
+	} else {
+		// Scalar per-thread: one thread per row.
+		// Dispatch (ceil(batchSize/256), 1, 1).
+		shader := b.compileShader("softmax", softmaxShader)
+		entry = b.getOrCreatePipeline("softmax", shader, bglUnary)
+		workgroups = (batchSize + workgroupSize - 1) / workgroupSize
+	}
 
 	bg := b.createBindGroupFromBuffers(entry.layout, []bindGroupBuffer{
 		bufBinding(inputResult.buffer, resultSize),
@@ -656,8 +696,6 @@ func (b *Backend) runSoftmaxLazy(input *tensor.RawTensor) (*tensor.RawTensor, er
 	})
 	// NO defer bg.Release() — ownership transfers to encoder batch via lazyResources.
 
-	// Each workgroup handles one row (batch sample).
-	workgroups := (batchSize + workgroupSize - 1) / workgroupSize
 	return b.addComputePassToEncoder(entry.pipeline, bg, workgroups, 1, 1, bufferResult, resultSize, input.Shape(), tensor.Float32,
 		lazyResources{
 			buffers:    append(transientBufs, bufferParams),

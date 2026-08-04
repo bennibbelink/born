@@ -621,6 +621,218 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 `
 
+// matmulSubgroupShader performs matrix multiplication using subgroup cooperative K-reduction.
+//
+// Design: C = A @ B where A is [M, K], B is [K, N], C is [M, N].
+//
+// Each workgroup of 32 threads computes exactly one output element C[row, col].
+// All 32 threads cooperate on the K-dimension: thread i handles indices
+// k = i, i+32, i+64, … accumulating a partial dot-product. subgroupAdd()
+// then reduces the 32 partial sums into one value. Only thread 0 writes.
+//
+// Dispatch: (N, M, 1) workgroups — one per output element.
+//
+// Hardware requirements:
+//   - FeatureSubgroupOperations (checked at device creation).
+//   - Assumes hardware subgroup_size >= 32. This holds on Nvidia (32),
+//     AMD (64 — threads 0-31 form a sub-subgroup that is handled by the
+//     hardware, but subgroupAdd spans all 64 lanes so lanes 32-63 contribute
+//     correctly if workgroup_size == subgroup_size on AMD). On Intel iGPU
+//     (subgroup_size = 16) the shader falls back through the guard because
+//     device creation with FeatureSubgroupOperations fails on those adapters.
+//
+// Note: `enable subgroups;` is parsed as a no-op by naga's Go WGSL parser
+// (parser.go skips enable directives). Subgroup builtins are recognized by
+// function name during the IR lowering pass (lower.go). The HAL SPIR-V
+// backend emits the required CapabilityGroupNonUniformArithmetic automatically.
+const matmulSubgroupShader = `
+enable subgroups;
+
+@group(0) @binding(0) var<storage, read> a: array<f32>;
+@group(0) @binding(1) var<storage, read> b: array<f32>;
+@group(0) @binding(2) var<storage, read_write> result: array<f32>;
+
+struct Params {
+    M: u32,
+    K: u32,
+    N: u32,
+    // _pad aligns struct to 16 bytes (std140).
+    _pad: u32,
+}
+@group(0) @binding(3) var<uniform> params: Params;
+
+// subgroupSize must match the hardware subgroup size for the cooperative
+// reduction to cover all K elements. 32 is the canonical size for Nvidia
+// and a safe minimum for Vulkan 1.1 subgroup-capable hardware.
+const subgroupSize: u32 = 32u;
+
+@compute @workgroup_size(32)
+fn main(
+    @builtin(workgroup_id)           wid:   vec3<u32>,
+    @builtin(local_invocation_id)    lid:   vec3<u32>,
+    @builtin(subgroup_invocation_id) sg_id: u32,
+) {
+    // One workgroup per output element: col = wid.x, row = wid.y.
+    let col = wid.x;
+    let row = wid.y;
+
+    if (row >= params.M || col >= params.N) {
+        return;
+    }
+
+    // Each lane handles a strided slice of K, accumulating a partial sum.
+    var partial: f32 = 0.0;
+    var k = sg_id;
+    loop {
+        if (k >= params.K) { break; }
+        partial += a[row * params.K + k] * b[k * params.N + col];
+        k += subgroupSize;
+    }
+
+    // Cooperative reduction: sum all 32 lanes' partials in one instruction.
+    let sum = subgroupAdd(partial);
+
+    // Only lane 0 writes the final result.
+    if (sg_id == 0u) {
+        result[row * params.N + col] = sum;
+    }
+}
+`
+
+// batchMatMulSubgroupShader performs batched matrix multiplication using subgroup reduction.
+//
+// Design: C[b] = A[b] @ B[b] where A is [batch, M, K], B is [batch, K, N], C is [batch, M, N].
+// Same cooperative K-reduction pattern as matmulSubgroupShader extended with a batch dimension.
+//
+// Dispatch: (N, M, batch) workgroups — one per (batch, row, col) output element.
+const batchMatMulSubgroupShader = `
+enable subgroups;
+
+@group(0) @binding(0) var<storage, read> a: array<f32>;
+@group(0) @binding(1) var<storage, read> b: array<f32>;
+@group(0) @binding(2) var<storage, read_write> result: array<f32>;
+
+struct Params {
+    batch: u32,
+    M: u32,
+    K: u32,
+    N: u32,
+}
+@group(0) @binding(3) var<uniform> params: Params;
+
+const subgroupSize: u32 = 32u;
+
+@compute @workgroup_size(32)
+fn main(
+    @builtin(workgroup_id)           wid:   vec3<u32>,
+    @builtin(subgroup_invocation_id) sg_id: u32,
+) {
+    let col       = wid.x;
+    let row       = wid.y;
+    let batch_idx = wid.z;
+
+    if (batch_idx >= params.batch || row >= params.M || col >= params.N) {
+        return;
+    }
+
+    let a_batch_offset = batch_idx * params.M * params.K;
+    let b_batch_offset = batch_idx * params.K * params.N;
+
+    var partial: f32 = 0.0;
+    var k = sg_id;
+    loop {
+        if (k >= params.K) { break; }
+        partial += a[a_batch_offset + row * params.K + k] * b[b_batch_offset + k * params.N + col];
+        k += subgroupSize;
+    }
+
+    let sum = subgroupAdd(partial);
+
+    if (sg_id == 0u) {
+        let c_idx = batch_idx * params.M * params.N + row * params.N + col;
+        result[c_idx] = sum;
+    }
+}
+`
+
+// softmaxSubgroupShader applies softmax along rows using subgroup cooperative reductions.
+//
+// Design: input shape [batch_size, num_classes].
+//
+// One workgroup of 32 threads processes one row. All 32 lanes cooperate across
+// the num_classes dimension using strided iteration (lane i handles classes
+// i, i+32, i+64, …). Three phases:
+//
+//  1. Max reduction: each lane accumulates a local max, subgroupMax() finds the
+//     global max across the row in a single instruction.
+//  2. Exp-sum: each lane computes exp(x - global_max) for its classes and
+//     accumulates a local sum, subgroupAdd() finds the global sum.
+//  3. Normalize: each lane writes exp(x - global_max) / global_sum for its
+//     classes (no reduction needed).
+//
+// Dispatch: (batch_size, 1, 1) workgroups — one per row.
+//
+// Hardware requirements: same as matmulSubgroupShader (FeatureSubgroupOperations,
+// subgroup_size >= 32). On hardware where subgroups are unavailable the caller
+// falls back to softmaxShader.
+const softmaxSubgroupShader = `
+enable subgroups;
+
+@group(0) @binding(0) var<storage, read> input: array<f32>;
+@group(0) @binding(1) var<storage, read_write> result: array<f32>;
+
+struct Params {
+    batch_size:   u32,
+    num_classes:  u32,
+    // _pad fields align struct to 16 bytes (std140).
+    _pad1: u32,
+    _pad2: u32,
+}
+@group(0) @binding(2) var<uniform> params: Params;
+
+// subgroupSize must match matmulSubgroupShader: 32 lanes per workgroup.
+const subgroupSize: u32 = 32u;
+
+@compute @workgroup_size(32)
+fn main(
+    @builtin(workgroup_id)           wid:   vec3<u32>,
+    @builtin(subgroup_invocation_id) sg_id: u32,
+) {
+    let row = wid.x;
+    if (row >= params.batch_size) { return; }
+    let offset = row * params.num_classes;
+
+    // Phase 1: cooperative max reduction across num_classes.
+    // Each lane processes the slice [sg_id, sg_id+32, sg_id+64, …].
+    var local_max: f32 = -3.402823466e+38; // -FLT_MAX
+    var i = sg_id;
+    loop {
+        if (i >= params.num_classes) { break; }
+        local_max = max(local_max, input[offset + i]);
+        i += subgroupSize;
+    }
+    let global_max = subgroupMax(local_max);
+
+    // Phase 2: cooperative exp-sum.
+    var local_sum: f32 = 0.0;
+    i = sg_id;
+    loop {
+        if (i >= params.num_classes) { break; }
+        local_sum += exp(input[offset + i] - global_max);
+        i += subgroupSize;
+    }
+    let global_sum = subgroupAdd(local_sum);
+
+    // Phase 3: normalize — each lane writes its slice; no reduction needed.
+    i = sg_id;
+    loop {
+        if (i >= params.num_classes) { break; }
+        result[offset + i] = exp(input[offset + i] - global_max) / global_sum;
+        i += subgroupSize;
+    }
+}
+`
+
 // greaterShader performs element-wise greater-than comparison: result = a > b ? 1.0 : 0.0.
 const greaterShader = `
 @group(0) @binding(0) var<storage, read> a: array<f32>;

@@ -72,11 +72,6 @@ func TestRawTensorAPI(t *testing.T) {
 		t.Error("IsUnique() = false after clone.Release(), want true (refcount == 1)")
 	}
 
-	// Test IsLazy() - should be false for CPU tensors.
-	if raw.IsLazy() {
-		t.Error("IsLazy() = true for CPU tensor, want false")
-	}
-
 	// Test Data() method.
 	data := raw.Data()
 	if len(data) != byteSize {

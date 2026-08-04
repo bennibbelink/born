@@ -195,18 +195,15 @@ func (a *Adam[B]) updateParameter(
 	m, v *tensor.Tensor[float32, B],
 	biasCorrection1, biasCorrection2 float32,
 ) {
-	// BackendReleaser is used when available for backend-agnostic release
-	// (ADR-019 Phase 3). Legacy ReleaseGPU calls are kept as fallback until Phase 4.
+	// BackendReleaser provides backend-agnostic GPU buffer release (ADR-019 Phase 4).
 	br, _ := any(a.backend).(tensor.BackendReleaser)
 
-	// releaseRaw is a helper that uses the BackendReleaser path when available,
-	// falling back to the legacy ReleaseGPU path.
+	// releaseRaw schedules deferred release of a GPU buffer via BackendReleaser.
 	releaseRaw := func(r *tensor.RawTensor) {
 		if br != nil {
 			br.ReleaseBackendData(r.BackendData())
 			r.SetBackendData(nil)
 		}
-		r.ReleaseGPU() // Legacy path — kept until Phase 4.
 	}
 
 	// Update biased first moment estimate.
@@ -270,18 +267,14 @@ func (a *Adam[B]) updateParameter(
 		releaseRaw(v.Raw())
 	}
 
-	// Persist updated moments and parameter — no CPU readback.
-	// Mark moments as persistent so ReclaimMemory does not release them.
-	// Backend-agnostic persistence (ADR-019 Phase 3).
+	// Persist updated moments so ReclaimMemory does not release them (ADR-019 Phase 4).
 	if br != nil {
 		br.SetPersistent(newM.Raw().BackendData(), true)
 		br.SetPersistent(newV.Raw().BackendData(), true)
 	}
-	newM.Raw().SetGPUPersistent(true) // Legacy path — kept until Phase 4.
-	newV.Raw().SetGPUPersistent(true) // Legacy path — kept until Phase 4.
 	a.m[param] = newM
 	a.v[param] = newV
-	param.SetTensor(updated) // Releases old param GPU buffer internally
+	param.SetTensor(updated) // Releases old param GPU buffer internally.
 }
 
 // ZeroGrad clears gradients for all parameters.

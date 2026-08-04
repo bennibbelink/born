@@ -136,7 +136,6 @@ func (s *SGD[B]) updateParameter(param *nn.Parameter[B], grad *tensor.Tensor[flo
 			br.ReleaseBackendData(r.BackendData())
 			r.SetBackendData(nil)
 		}
-		r.ReleaseGPU() // Legacy path — kept until Phase 4.
 	}
 
 	current := param.Tensor()
@@ -174,7 +173,6 @@ func (s *SGD[B]) updateParameterWithMomentum(param *nn.Parameter[B], grad *tenso
 			br.ReleaseBackendData(r.BackendData())
 			r.SetBackendData(nil)
 		}
-		r.ReleaseGPU() // Legacy path — kept until Phase 4.
 	}
 
 	// Get or initialize velocity buffer (zeros, same shape as parameter).

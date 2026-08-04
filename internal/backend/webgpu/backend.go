@@ -44,9 +44,9 @@ type pipelineEntry struct {
 // single queue.Submit call when any tensor's Data() triggers ReadGPUBuffer.
 type pendingSubmission struct {
 	cmdBuffer  *wgpu.CommandBuffer
-	resultBufs []*wgpu.Buffer        // params + transient inputs, released after Submit
-	bindGroups []*wgpu.BindGroup     // released after Submit
-	lazyDatas  []*tensor.LazyGPUData // kept alive until after Submit; NOT released here
+	resultBufs []*wgpu.Buffer    // params + transient inputs, released after Submit
+	bindGroups []*wgpu.BindGroup // released after Submit
+	lazyDatas  []*LazyGPUData   // kept alive until after Submit; NOT released here
 }
 
 // encoderBatch accumulates multiple compute passes into a single CommandEncoder.
@@ -58,9 +58,9 @@ type pendingSubmission struct {
 // lazyDatas holds LazyGPUData refs to keep result buffers alive until Submit.
 type encoderBatch struct {
 	encoder    *wgpu.CommandEncoder
-	resultBufs []*wgpu.Buffer        // params + transient inputs, released after Submit
-	bindGroups []*wgpu.BindGroup     // released after Submit
-	lazyDatas  []*tensor.LazyGPUData // kept alive until Submit; dropped after (not released)
+	resultBufs []*wgpu.Buffer  // params + transient inputs, released after Submit
+	bindGroups []*wgpu.BindGroup // released after Submit
+	lazyDatas  []*LazyGPUData  // kept alive until Submit; dropped after (not released)
 	count      int
 	allocBytes uint64 // total GPU bytes held by this batch
 }
@@ -162,7 +162,7 @@ type Backend struct {
 	// the autodiff tape (NoGrad blocks, carry state, masks, metrics).
 	liveGPU struct {
 		mu      sync.Mutex
-		tensors map[*tensor.LazyGPUData]struct{}
+		tensors map[*LazyGPUData]struct{}
 	}
 
 	// Memory tracking
@@ -297,7 +297,7 @@ func newBackendFromDevice(instance *wgpu.Instance, adapter *wgpu.Adapter, device
 		gpuPool:     nil,
 		scalarCache: make(map[uint64]*GPUTensor),
 	}
-	b.liveGPU.tensors = make(map[*tensor.LazyGPUData]struct{}, 1024)
+	b.liveGPU.tensors = make(map[*LazyGPUData]struct{}, 1024)
 
 	pool := NewTieredPool(device)
 	pool.onOOM = func() {
@@ -382,7 +382,7 @@ func (b *Backend) Release() {
 
 	// Phase 2: Release all tracked GPU resources back to pool.
 	b.liveGPU.mu.Lock()
-	toRelease := make([]*tensor.LazyGPUData, 0, len(b.liveGPU.tensors))
+	toRelease := make([]*LazyGPUData, 0, len(b.liveGPU.tensors))
 	for l := range b.liveGPU.tensors {
 		toRelease = append(toRelease, l)
 	}
@@ -819,26 +819,29 @@ func (s *TrainingScope) Track(t *tensor.RawTensor) {
 	s.tracked = append(s.tracked, t)
 }
 
-// Release calls ReleaseGPU on all tracked tensors and resets the scope for reuse.
+// Release schedules GPU buffer release for all tracked tensors and resets the scope for reuse.
 // Idempotent — safe to call multiple times. The GPU buffers are enqueued for
 // deferred destruction via wgpu's DestroyQueue and released after the next
 // queue.Submit completes.
 func (s *TrainingScope) Release() {
 	for _, t := range s.tracked {
-		t.ReleaseGPU()
+		if gpuData, ok := t.BackendData().(*LazyGPUData); ok && gpuData != nil {
+			gpuData.ScheduleRelease()
+			t.SetBackendData(nil)
+		}
 	}
 	s.tracked = s.tracked[:0]
 }
 
 // RegisterLiveGPU registers a LazyGPUData in the backend's live tensor set.
-func (b *Backend) RegisterLiveGPU(l *tensor.LazyGPUData) {
+func (b *Backend) RegisterLiveGPU(l *LazyGPUData) {
 	b.liveGPU.mu.Lock()
 	b.liveGPU.tensors[l] = struct{}{}
 	b.liveGPU.mu.Unlock()
 }
 
 // UnregisterLiveGPU removes a LazyGPUData from the live tensor set.
-func (b *Backend) UnregisterLiveGPU(l *tensor.LazyGPUData) {
+func (b *Backend) UnregisterLiveGPU(l *LazyGPUData) {
 	b.liveGPU.mu.Lock()
 	delete(b.liveGPU.tensors, l)
 	b.liveGPU.mu.Unlock()
@@ -861,8 +864,8 @@ func (b *Backend) FlushGPU() {
 // transient intermediates (forward pass, NoGrad blocks, masks) are released.
 func (b *Backend) ReclaimMemory() {
 	b.liveGPU.mu.Lock()
-	toRelease := make([]*tensor.LazyGPUData, 0, len(b.liveGPU.tensors))
-	surviving := make(map[*tensor.LazyGPUData]struct{})
+	toRelease := make([]*LazyGPUData, 0, len(b.liveGPU.tensors))
+	surviving := make(map[*LazyGPUData]struct{})
 	for l := range b.liveGPU.tensors {
 		if l.IsPersistent() || l.RefCount() > 1 {
 			surviving[l] = struct{}{}
@@ -873,8 +876,12 @@ func (b *Backend) ReclaimMemory() {
 	b.liveGPU.tensors = surviving
 	b.liveGPU.mu.Unlock()
 
+	// Use ScheduleRelease (deferred) rather than Release (immediate) so buffers
+	// that are still referenced by pending command buffers in the active encoder
+	// batch are not freed until after queue.Submit completes. If no batch is
+	// active, ScheduleRelease degrades to an immediate pool return.
 	for _, l := range toRelease {
-		l.Release()
+		l.ScheduleRelease()
 	}
 
 	b.flushCommands()
@@ -914,27 +921,27 @@ func (b *Backend) MaxPool2DBackward(input, grad *tensor.RawTensor, maxIndices []
 
 // ReleaseBackendData schedules the GPU buffer for deferred release.
 // Implements tensor.BackendReleaser (ADR-019 Phase 3).
-// data must be a *tensor.LazyGPUData created by this backend; other types are ignored.
+// data must be a *LazyGPUData created by this backend; other types are ignored.
 func (b *Backend) ReleaseBackendData(data any) {
-	if gpuData, ok := data.(*tensor.LazyGPUData); ok && gpuData != nil {
+	if gpuData, ok := data.(*LazyGPUData); ok && gpuData != nil {
 		gpuData.ScheduleRelease()
 	}
 }
 
 // SetPersistent marks a GPU buffer as persistent, surviving ReclaimMemory.
 // Implements tensor.BackendReleaser (ADR-019 Phase 3).
-// data must be a *tensor.LazyGPUData; other types are ignored.
+// data must be a *LazyGPUData; other types are ignored.
 func (b *Backend) SetPersistent(data any, persistent bool) {
-	if gpuData, ok := data.(*tensor.LazyGPUData); ok && gpuData != nil {
+	if gpuData, ok := data.(*LazyGPUData); ok && gpuData != nil {
 		gpuData.SetPersistent(persistent)
 	}
 }
 
 // IsPersistent reports whether a GPU buffer is marked as persistent.
 // Implements tensor.BackendReleaser (ADR-019 Phase 3).
-// data must be a *tensor.LazyGPUData; other types return false.
+// data must be a *LazyGPUData; other types return false.
 func (b *Backend) IsPersistent(data any) bool {
-	if gpuData, ok := data.(*tensor.LazyGPUData); ok && gpuData != nil {
+	if gpuData, ok := data.(*LazyGPUData); ok && gpuData != nil {
 		return gpuData.IsPersistent()
 	}
 	return false

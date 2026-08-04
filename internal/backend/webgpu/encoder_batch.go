@@ -102,7 +102,7 @@ func (b *Backend) addComputePassToEncoder(
 		bg.Release()
 		return nil, err
 	}
-	gpuData := lazyTensor.GPUData() // non-nil: just created
+	gpuData, _ := lazyTensor.BackendData().(*LazyGPUData) // non-nil: just created
 
 	b.pendingMu.Lock()
 
@@ -169,12 +169,12 @@ func (b *Backend) addComputePassToEncoder(
 
 // getOrCreateInputBuffer returns a GPU storage buffer for the given tensor.
 //
-// For CPU tensors (t.GPUData() == nil): creates and caches a Storage|CopySrc
+// For CPU tensors (BackendData() == nil): creates and caches a Storage|CopySrc
 // buffer on first access. Subsequent calls return the cached buffer without
 // re-uploading. Cached buffers are never released by finishActiveBatchLocked
 // — they are released in clearInputBufferCache() from Backend.Release().
 //
-// For lazy GPU tensors (t.GPUData() != nil && !IsRealized()): returns the
+// For lazy GPU tensors (BackendData() is *LazyGPUData && !IsRealized()): returns the
 // existing result buffer directly (cached:true), without any GPU→GPU copy.
 // The result buffer is Storage|CopySrc and can be bound directly as a
 // compute shader input. Ownership remains with LazyGPUData.
@@ -184,12 +184,12 @@ func (b *Backend) addComputePassToEncoder(
 // inputBufferResult holds the result of getOrCreateInputBuffer.
 type inputBufferResult struct {
 	buffer  *wgpu.Buffer
-	cached  bool                // true = owned by cache or LazyGPUData; false = caller must release
-	gpuData *tensor.LazyGPUData // non-nil for lazy GPU tensors; must be tracked for GC-safety
+	cached  bool         // true = owned by cache or LazyGPUData; false = caller must release
+	gpuData *LazyGPUData // non-nil for lazy GPU tensors; must be tracked for GC-safety
 }
 
 func (b *Backend) getOrCreateInputBuffer(t *tensor.RawTensor) inputBufferResult {
-	if gpuData := t.GPUData(); gpuData != nil && !gpuData.IsRealized() {
+	if gpuData, ok := t.BackendData().(*LazyGPUData); ok && gpuData != nil && !gpuData.IsRealized() {
 		if bp := gpuData.BufferPtr(); bp != nil {
 			existingBuffer := (*wgpu.Buffer)(bp)
 			runtime.KeepAlive(gpuData)

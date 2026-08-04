@@ -45,7 +45,7 @@ func TestDeferredStaging_NoStagingDuringOps(t *testing.T) {
 	}
 
 	// result is now a lazy tensor with a Storage|CopySrc buffer.
-	gpuData := result.GPUData()
+	gpuData, _ := result.BackendData().(*LazyGPUData)
 	if gpuData == nil {
 		t.Fatal("expected lazy tensor with GPU data after 100 chained Adds")
 	}
@@ -149,7 +149,7 @@ func TestDeferredStaging_StagingOnDataOnly(t *testing.T) {
 	}
 
 	// result is a lazy tensor with GPU data.
-	gpuData := result.GPUData()
+	gpuData, _ := result.BackendData().(*LazyGPUData)
 	if gpuData == nil {
 		t.Fatal("result must be a lazy tensor with GPU data")
 	}
@@ -162,9 +162,9 @@ func TestDeferredStaging_StagingOnDataOnly(t *testing.T) {
 
 	// After Data(): GPU data should be realized.
 	// Note: gpuData pointer was captured before; the tensor itself is now realized.
-	gpuData2 := result.GPUData()
-	// GPUData() may return nil after realization in some implementations, or
-	// return the same object marked as realized. Both are acceptable.
+	gpuData2, _ := result.BackendData().(*LazyGPUData)
+	// BackendData() returns nil after realization (cleared in Materialize).
+	// gpuData (captured before) may still exist as a realized object.
 	if gpuData2 != nil && !gpuData2.IsRealized() {
 		t.Error("GPU data should be realized after Data() call")
 	}
@@ -508,9 +508,9 @@ func TestDeferredStaging_BufferUsageFlags(t *testing.T) {
 
 	result := backend.Add(raw, raw)
 
-	gpuData := result.GPUData()
+	gpuData, _ := result.BackendData().(*LazyGPUData)
 	if gpuData == nil {
-		t.Fatal("expected lazy tensor with GPUData")
+		t.Fatal("expected lazy tensor with LazyGPUData")
 	}
 
 	// Get the underlying wgpu.Buffer.

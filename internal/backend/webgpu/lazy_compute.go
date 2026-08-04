@@ -41,20 +41,19 @@ func getEnvIntOr(key string, defaultVal int) int {
 // buffer, reads the bytes, then releases the staging buffer — all inline.
 func (b *Backend) createLazyResult(resultBuf *wgpu.Buffer, bufferSize uint64, shape tensor.Shape, dtype tensor.DataType) (*tensor.RawTensor, error) {
 	// Create lazy GPU data referencing the result (Storage|CopySrc) buffer.
-	gpuData := tensor.NewLazyGPUData(unsafe.Pointer(resultBuf), resultBuf, bufferSize, b) //nolint:gosec // G103: Required for GPU buffer tracking
+	gpuData := NewLazyGPUData(unsafe.Pointer(resultBuf), resultBuf, bufferSize, b) //nolint:gosec // G103: Required for GPU buffer tracking
 
-	// Create lazy tensor — CPU buffer allocated but not filled until Data() is called.
-	result, err := tensor.NewLazyRaw(shape, dtype, tensor.WebGPU, gpuData)
+	// Create the RawTensor via the standard path; shape and device are set here.
+	result, err := tensor.NewRaw(shape, dtype, tensor.WebGPU)
 	if err != nil {
-		// If tensor creation fails, release the result buffer.
-		resultBuf.Release()
+		// If tensor creation fails, release the GPU data.
+		gpuData.Release()
 		return nil, err
 	}
 
-	// Phase 1: opaque backend data — both paths reference the same GPU buffer.
-	result.SetBackendData(gpuData) // kept for Phase 1 consumers.
-	// Phase 2: register materializer so Data() can go through the backend-agnostic
-	// path (ADR-019). The old gpuData path remains intact for Phase 3-4.
+	// Store opaque backend data so callers can type-assert to *LazyGPUData.
+	result.SetBackendData(gpuData)
+	// Register materializer so Data() triggers GPU→CPU readback (ADR-019).
 	result.SetMaterializer(b)
 
 	return result, nil
@@ -105,7 +104,7 @@ func (b *Backend) runBinaryOpLazy(a, other *tensor.RawTensor, shaderName, shader
 	// Collect transient (non-cached) input buffers for release after Submit.
 	// Collect gpuData from lazy inputs to keep them alive until Submit.
 	var transientBufs []*wgpu.Buffer
-	var inputLazyDatas []*tensor.LazyGPUData
+	var inputLazyDatas []*LazyGPUData
 	if !inputA.cached {
 		transientBufs = append(transientBufs, inputA.buffer)
 	} else if inputA.gpuData != nil {
@@ -164,7 +163,7 @@ func (b *Backend) runBinaryOpLazy(a, other *tensor.RawTensor, shaderName, shader
 type lazyResources struct {
 	buffers    []*wgpu.Buffer
 	bindGroups []*wgpu.BindGroup
-	lazyDatas  []*tensor.LazyGPUData // input lazy tensors kept alive until Submit
+	lazyDatas  []*LazyGPUData // input lazy tensors kept alive until Submit
 }
 
 // maxPendingBeforeFlush limits how many compute passes accumulate in the
@@ -215,18 +214,18 @@ func (b *Backend) copyGPUBuffer(srcBuffer *wgpu.Buffer, size uint64) *wgpu.Buffe
 // createBufferFromTensor creates a GPU buffer from a RawTensor.
 // If the tensor already has GPU data (lazy), performs GPU→GPU copy (no CPU round-trip!).
 func (b *Backend) createBufferFromTensor(t *tensor.RawTensor) *wgpu.Buffer {
-	// Check if tensor already has GPU data
-	if gpuData := t.GPUData(); gpuData != nil && !gpuData.IsRealized() {
+	// Check if tensor already has GPU data.
+	if gpuData, ok := t.BackendData().(*LazyGPUData); ok && gpuData != nil && !gpuData.IsRealized() {
 		// Tensor has unrealized GPU data - use GPU→GPU copy.
 		// KeepAlive prevents GC from collecting gpuData (and running its
 		// finalizer which releases the buffer) while copyGPUBuffer uses it.
-		existingBuffer := (*wgpu.Buffer)(gpuData.BufferPtr())
+		existingBuffer := gpuData.buffer()
 		result := b.copyGPUBuffer(existingBuffer, gpuData.Size())
 		runtime.KeepAlive(gpuData)
 		return result
 	}
 
-	// CPU tensor - upload data to GPU
+	// CPU tensor - upload data to GPU.
 	return b.createBuffer(t.Data(), gputypes.BufferUsageStorage|gputypes.BufferUsageCopySrc)
 }
 
@@ -299,7 +298,7 @@ func (b *Backend) runMatMulLazy(a, other *tensor.RawTensor) (*tensor.RawTensor, 
 
 	// Collect transient input buffers and lazy input gpuDatas for Submit-safety.
 	var transientBufs []*wgpu.Buffer
-	var inputLazyDatas []*tensor.LazyGPUData
+	var inputLazyDatas []*LazyGPUData
 	if !inputA.cached {
 		transientBufs = append(transientBufs, inputA.buffer)
 	} else if inputA.gpuData != nil {
@@ -364,7 +363,7 @@ func (b *Backend) runUnaryOpLazy(x *tensor.RawTensor, shaderName, shaderCode str
 
 	// Collect transient input buffers and lazy input gpuDatas for Submit-safety.
 	var transientBufs []*wgpu.Buffer
-	var inputLazyDatas []*tensor.LazyGPUData
+	var inputLazyDatas []*LazyGPUData
 	if !inputX.cached {
 		transientBufs = append(transientBufs, inputX.buffer)
 	} else if inputX.gpuData != nil {
@@ -413,7 +412,7 @@ func (b *Backend) runScalarOpLazy(x *tensor.RawTensor, scalar float32, shaderNam
 
 	// Collect transient input buffers and lazy input gpuDatas for Submit-safety.
 	var transientBufs []*wgpu.Buffer
-	var inputLazyDatas []*tensor.LazyGPUData
+	var inputLazyDatas []*LazyGPUData
 	if !inputX.cached {
 		transientBufs = append(transientBufs, inputX.buffer)
 	} else if inputX.gpuData != nil {
@@ -499,7 +498,7 @@ func (b *Backend) runBatchMatMulLazy(a, other *tensor.RawTensor) (*tensor.RawTen
 
 	// Collect transient input buffers and lazy input gpuDatas for Submit-safety.
 	var transientBufs []*wgpu.Buffer
-	var inputLazyDatas []*tensor.LazyGPUData
+	var inputLazyDatas []*LazyGPUData
 	if !inputA.cached {
 		transientBufs = append(transientBufs, inputA.buffer)
 	} else if inputA.gpuData != nil {
@@ -568,7 +567,7 @@ func (b *Backend) runTransposeLazy(input *tensor.RawTensor) (*tensor.RawTensor, 
 
 	// Collect transient input buffers and lazy input gpuDatas for Submit-safety.
 	var transientBufs []*wgpu.Buffer
-	var inputLazyDatas []*tensor.LazyGPUData
+	var inputLazyDatas []*LazyGPUData
 	if !inputResult.cached {
 		transientBufs = append(transientBufs, inputResult.buffer)
 	} else if inputResult.gpuData != nil {
@@ -629,7 +628,7 @@ func (b *Backend) runSoftmaxLazy(input *tensor.RawTensor) (*tensor.RawTensor, er
 
 	// Collect transient input buffers and lazy input gpuDatas for Submit-safety.
 	var transientBufs []*wgpu.Buffer
-	var inputLazyDatas []*tensor.LazyGPUData
+	var inputLazyDatas []*LazyGPUData
 	if !inputResult.cached {
 		transientBufs = append(transientBufs, inputResult.buffer)
 	} else if inputResult.gpuData != nil {
@@ -731,7 +730,7 @@ func (b *Backend) runTransposeNDLazy(input *tensor.RawTensor, axes []int) (*tens
 
 	// Collect transient input buffers and lazy input gpuDatas for Submit-safety.
 	var transientBufs []*wgpu.Buffer
-	var inputLazyDatas []*tensor.LazyGPUData
+	var inputLazyDatas []*LazyGPUData
 	if !inputResult.cached {
 		transientBufs = append(transientBufs, inputResult.buffer)
 	} else if inputResult.gpuData != nil {
@@ -870,7 +869,7 @@ func (b *Backend) runExpandLazy(input *tensor.RawTensor, newShape tensor.Shape) 
 
 	// Collect transient input buffers and lazy input gpuDatas for Submit-safety.
 	var transientBufs []*wgpu.Buffer
-	var inputLazyDatas []*tensor.LazyGPUData
+	var inputLazyDatas []*LazyGPUData
 	if !inputResult.cached {
 		transientBufs = append(transientBufs, inputResult.buffer)
 	} else if inputResult.gpuData != nil {
@@ -993,7 +992,7 @@ func (b *Backend) runGatherLazy(input *tensor.RawTensor, dim int, indices *tenso
 
 	// Collect transient input buffers and lazy input gpuDatas for Submit-safety.
 	var transientBufs []*wgpu.Buffer
-	var inputLazyDatas []*tensor.LazyGPUData
+	var inputLazyDatas []*LazyGPUData
 	if !inputResult.cached {
 		transientBufs = append(transientBufs, inputResult.buffer)
 	} else if inputResult.gpuData != nil {
@@ -1134,7 +1133,7 @@ func (b *Backend) runWhereLazy(condition, x, y *tensor.RawTensor) (*tensor.RawTe
 
 	// Collect transient input buffers and lazy input gpuDatas for Submit-safety.
 	var transientBufs []*wgpu.Buffer
-	var inputLazyDatas []*tensor.LazyGPUData
+	var inputLazyDatas []*LazyGPUData
 	if !inputCond.cached {
 		transientBufs = append(transientBufs, inputCond.buffer)
 	} else if inputCond.gpuData != nil {
@@ -1305,7 +1304,7 @@ func (b *Backend) runClampLazy(input *tensor.RawTensor, minBound, maxBound any) 
 
 	// Collect transient input buffers and lazy input gpuDatas for Submit-safety.
 	var transientBufs []*wgpu.Buffer
-	var inputLazyDatas []*tensor.LazyGPUData
+	var inputLazyDatas []*LazyGPUData
 	if !inputResult.cached {
 		transientBufs = append(transientBufs, inputResult.buffer)
 	} else if inputResult.gpuData != nil {
@@ -1396,7 +1395,7 @@ func (b *Backend) runSelectAddLazy(dest, indices, src *tensor.RawTensor) (*tenso
 
 	// Collect transient input buffers and lazy input gpuDatas for Submit-safety.
 	var transientBufs []*wgpu.Buffer
-	var inputLazyDatas []*tensor.LazyGPUData
+	var inputLazyDatas []*LazyGPUData
 	if !inputDest.cached {
 		transientBufs = append(transientBufs, inputDest.buffer)
 	} else if inputDest.gpuData != nil {
@@ -1498,7 +1497,7 @@ func (b *Backend) runScatterAddLazy(dest *tensor.RawTensor, dim int, indices, sr
 
 	// Collect transient input buffers and lazy input gpuDatas for Submit-safety.
 	var transientBufs []*wgpu.Buffer
-	var inputLazyDatas []*tensor.LazyGPUData
+	var inputLazyDatas []*LazyGPUData
 	if !inputDest.cached {
 		transientBufs = append(transientBufs, inputDest.buffer)
 	} else if inputDest.gpuData != nil {
@@ -1610,16 +1609,15 @@ func (b *Backend) runReshapeLazy(t *tensor.RawTensor, newShape tensor.Shape) (*t
 
 	// GPU-to-GPU copy: flushes pending commands, then CopyBufferToBuffer.
 	// Ownership of dstBuffer transfers to the new LazyGPUData below.
-	gpuData := t.GPUData()
-	if gpuData == nil || gpuData.IsRealized() {
+	gpuData, ok := t.BackendData().(*LazyGPUData)
+	if !ok || gpuData == nil || gpuData.IsRealized() {
 		return nil, &lazyError{msg: "reshape: source tensor has no unrealized GPU data"}
 	}
 
-	bp := gpuData.BufferPtr()
-	if bp == nil {
+	srcBuffer := gpuData.buffer()
+	if srcBuffer == nil {
 		return nil, &lazyError{msg: "reshape: source GPU buffer already released"}
 	}
-	srcBuffer := (*wgpu.Buffer)(bp)
 	size := gpuData.Size()
 
 	dstBuffer := b.copyGPUBuffer(srcBuffer, size)
@@ -1685,7 +1683,7 @@ func (b *Backend) runSumDimLazy(x *tensor.RawTensor, dim int, keepDim bool) (*te
 
 	// Collect transient input buffers and lazy input gpuDatas for Submit-safety.
 	var transientBufs []*wgpu.Buffer
-	var inputLazyDatas []*tensor.LazyGPUData
+	var inputLazyDatas []*LazyGPUData
 	if !inputX.cached {
 		transientBufs = append(transientBufs, inputX.buffer)
 	} else if inputX.gpuData != nil {
@@ -1780,7 +1778,7 @@ func (b *Backend) runCatLazy(tensors []*tensor.RawTensor, dim int) (*tensor.RawT
 	entry := b.getOrCreatePipeline("cat", shader, bglUnary)
 
 	// Track all lazy input gpuDatas to keep them alive until Submit.
-	var allLazyDatas []*tensor.LazyGPUData
+	var allLazyDatas []*LazyGPUData
 
 	outDimSize := uint32(totalDim)
 
@@ -1937,7 +1935,7 @@ func (b *Backend) runChunkLazy(x *tensor.RawTensor, n, dim int) ([]*tensor.RawTe
 	releaseResults := func(upTo int) {
 		for _, r := range results[:upTo] {
 			if r != nil {
-				if gd := r.GPUData(); gd != nil {
+				if gd, ok := r.BackendData().(*LazyGPUData); ok && gd != nil {
 					gd.Release()
 				}
 			}
@@ -1982,7 +1980,7 @@ func (b *Backend) runChunkLazy(x *tensor.RawTensor, n, dim int) ([]*tensor.RawTe
 		// own reference in lazyResources.buffers so the buffer stays alive until Submit.
 		// For cached buffers the Backend holds the lifetime; track gpuData instead.
 		var transientBufs []*wgpu.Buffer
-		var lazyDatas []*tensor.LazyGPUData
+		var lazyDatas []*LazyGPUData
 		if !inputX.cached {
 			transientBufs = append(transientBufs, inputX.buffer)
 		} else if inputX.gpuData != nil {
@@ -2046,7 +2044,7 @@ func (b *Backend) runEmbeddingLazy(weight, indices *tensor.RawTensor) (*tensor.R
 
 	// Collect transient input buffers and lazy input gpuDatas for Submit-safety.
 	var transientBufs []*wgpu.Buffer
-	var inputLazyDatas []*tensor.LazyGPUData
+	var inputLazyDatas []*LazyGPUData
 	if !inputWeight.cached {
 		transientBufs = append(transientBufs, inputWeight.buffer)
 	} else if inputWeight.gpuData != nil {

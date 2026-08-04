@@ -138,14 +138,18 @@ func (t *Tensor[T, B]) Detach() *Tensor[T, B] {
 // with refcount <= 1 — which includes carry state after ClearTape drops
 // the tape's reference.
 func (t *Tensor[T, B]) Persist() *Tensor[T, B] {
-	t.raw.SetGPUPersistent(true)
+	if br, ok := any(t.backend).(BackendReleaser); ok {
+		br.SetPersistent(t.raw.BackendData(), true)
+	}
 	return t
 }
 
 // Unpersist removes the persistent flag, allowing ReclaimMemory to
 // release this tensor's GPU data. Use when carry state is no longer needed.
 func (t *Tensor[T, B]) Unpersist() *Tensor[T, B] {
-	t.raw.SetGPUPersistent(false)
+	if br, ok := any(t.backend).(BackendReleaser); ok {
+		br.SetPersistent(t.raw.BackendData(), false)
+	}
 	return t
 }
 

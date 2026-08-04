@@ -433,8 +433,8 @@ func (b *Backend) castToInt32(x, result *tensor.RawTensor) {
 // If the tensor has unrealized lazy GPU data, a GPU→CPU readback is triggered.
 // For tensors that are already CPU-resident, Data() is returned directly (zero-copy).
 func (b *Backend) Materialize(t *tensor.RawTensor) ([]byte, error) {
-	if t.GPUData() != nil && !t.GPUData().IsRealized() {
-		data, err := t.GPUData().Realize()
+	if gpuData, ok := t.BackendData().(*LazyGPUData); ok && gpuData != nil && !gpuData.IsRealized() {
+		data, err := gpuData.Realize()
 		if err != nil {
 			return nil, fmt.Errorf("webgpu: Materialize: GPU readback failed: %w", err)
 		}

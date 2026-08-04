@@ -164,13 +164,13 @@ func TestSelectAdd_GPU_ResultIsLazy(t *testing.T) {
 
 	result := b.SelectAdd(dest, 0, idx, src)
 
-	if !result.IsLazy() {
+	if !isLazyTensor(result) {
 		t.Error("SelectAdd GPU: result should be lazy before Data() is called")
 	}
 
 	_ = result.AsFloat32() // triggers realization
 
-	if result.IsLazy() {
+	if isLazyTensor(result) {
 		t.Error("SelectAdd GPU: result should be realized after AsFloat32()")
 	}
 }
@@ -365,13 +365,13 @@ func TestScatterAdd_GPU_ResultIsLazy(t *testing.T) {
 
 	result := b.ScatterAdd(dest, 0, idx, src)
 
-	if !result.IsLazy() {
+	if !isLazyTensor(result) {
 		t.Error("ScatterAdd GPU: result should be lazy before Data() is called")
 	}
 
 	_ = result.AsFloat32()
 
-	if result.IsLazy() {
+	if isLazyTensor(result) {
 		t.Error("ScatterAdd GPU: result should be realized after AsFloat32()")
 	}
 }

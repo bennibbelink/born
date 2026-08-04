@@ -343,12 +343,11 @@ func (m *Model[B]) Release() {
 	release := func(params []*nn.Parameter[B]) {
 		for _, p := range params {
 			raw := p.Tensor().Raw()
-			// Backend-agnostic release (ADR-019 Phase 3).
+			// Release GPU buffer immediately via BackendReleaser (ADR-019 Phase 4).
 			if br != nil {
 				br.ReleaseBackendData(raw.BackendData())
 				raw.SetBackendData(nil)
 			}
-			raw.ReleaseGPU() // Legacy path — kept until Phase 4.
 		}
 	}
 	release(m.Embed.Parameters())

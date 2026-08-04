@@ -59,17 +59,22 @@ func (b *AutodiffBackend[B]) Tape() *GradientTape {
 
 // ClearTape clears the gradient tape and reclaims GPU memory from intermediate
 // tensors. This is the recommended way to clear the tape between training steps
-// instead of calling Tape().Clear() directly. It releases all intermediate GPU
-// buffers recorded during the forward pass, then flushes the GPU command queue
-// and triggers device-side destruction of deferred buffers (ADR-015).
+// instead of calling Tape().Clear() directly.
+//
+// In ADR-019 Phase 4, GPU buffer release for tape operation outputs is no longer
+// performed by tape.Clear() itself. Instead, ClearTape() calls ReclaimMemory() on
+// the inner backend to release all non-persistent live GPU tensors (forward
+// activations, backward intermediates) in a single pass.
+//
+// Persistent tensors (model weights, optimizer moments, carry state marked with
+// .Persist()) are skipped by ReclaimMemory — their .SetPersistent(true) flag
+// prevents premature release.
 func (b *AutodiffBackend[B]) ClearTape() {
 	b.tape.Clear()
-	// Flush deferred GPU buffer releases to pool. tape.Clear() calls
-	// DeferReleaseGPUBuffer which queues buffers in activeBatch — without
-	// flushing, they stay there and are never returned to pool for reuse.
-	// Use FlushGPU (not ReclaimMemory) to avoid killing carry state tensors.
-	if flusher, ok := any(b.inner).(interface{ FlushGPU() }); ok {
-		flusher.FlushGPU()
+	// ReclaimMemory releases all non-persistent live GPU tensors (forward activations,
+	// intermediate backward results). Persistent tensors survive (ADR-019 Phase 4).
+	if reclaimer, ok := any(b.inner).(tensor.MemoryReclaimer); ok {
+		reclaimer.ReclaimMemory()
 	}
 }
 

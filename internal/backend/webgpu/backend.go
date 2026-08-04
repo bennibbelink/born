@@ -165,6 +165,11 @@ type Backend struct {
 		tensors map[*LazyGPUData]struct{}
 	}
 
+	// subgroupsEnabled is true when the device was created with the SubgroupOperations
+	// feature and subgroup shaders can be used safely. Detected once at device creation
+	// and used to select the subgroup MatMul path at dispatch time.
+	subgroupsEnabled bool
+
 	// Memory tracking
 	memoryStats struct {
 		totalAllocatedBytes uint64
@@ -229,7 +234,22 @@ func newHardwareBackend(backends wgpu.Backends) (*Backend, error) {
 
 	info := adapter.Info()
 
-	device, err := adapter.RequestDevice(nil)
+	// Request SubgroupOperations when the adapter advertises support.
+	// On Vulkan the HAL ignores the feature flag at device creation (subgroup
+	// ops are governed by SPIR-V capabilities), but we still record whether
+	// the feature was granted so the rest of the backend can guard dispatch.
+	// On DX12 (SM 6.0+) and the Rust wgpu-native backend the flag is honored.
+	var desc *wgpu.DeviceDescriptor
+	subgroupsEnabled := false
+	if adapter.Features().Contains(gputypes.FeatureSubgroupOperations) {
+		desc = &wgpu.DeviceDescriptor{
+			Label:            "born",
+			RequiredFeatures: gputypes.Features(gputypes.FeatureSubgroupOperations),
+		}
+		subgroupsEnabled = true
+	}
+
+	device, err := adapter.RequestDevice(desc)
 	if err != nil {
 		adapter.Release()
 		instance.Release()
@@ -244,7 +264,12 @@ func newHardwareBackend(backends wgpu.Backends) (*Backend, error) {
 		return nil, fmt.Errorf("webgpu: failed to get queue")
 	}
 
-	return newBackendFromDevice(instance, adapter, device, queue, &info)
+	b, err := newBackendFromDevice(instance, adapter, device, queue, &info)
+	if err != nil {
+		return nil, err
+	}
+	b.subgroupsEnabled = subgroupsEnabled
+	return b, nil
 }
 
 // newSoftwareBackend creates a Backend using the software HAL — CPU-based

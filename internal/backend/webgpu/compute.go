@@ -656,9 +656,6 @@ func (b *Backend) runMatMul(a, other *tensor.RawTensor) (*tensor.RawTensor, erro
 		return nil, fmt.Errorf("webgpu: matmul shape mismatch: [%d,%d] @ [%d,%d]", M, K, other.Shape()[0], N)
 	}
 
-	shader := b.compileShader("matmul", matmulShader)
-	entry := b.getOrCreatePipeline("matmul", shader, bglBinary)
-
 	bufferA := b.createBuffer(a.Data(), gputypes.BufferUsageStorage|gputypes.BufferUsageCopySrc)
 	defer bufferA.Release()
 
@@ -676,16 +673,35 @@ func (b *Backend) runMatMul(a, other *tensor.RawTensor) (*tensor.RawTensor, erro
 	}
 	defer bufferResult.Release()
 
-	// Uniform: M, K, N as u32 (3×4 = 12 bytes, padded to 16).
-	params := make([]byte, 16)
-	binary.LittleEndian.PutUint32(params[0:4], M)
-	binary.LittleEndian.PutUint32(params[4:8], K)
-	binary.LittleEndian.PutUint32(params[8:12], N)
-	bufferParams := b.createUniformBuffer(params)
+	// Uniform buffer: M, K, N plus one u32 pad to meet std140 16-byte alignment.
+	paramBytes := make([]byte, 16)
+	binary.LittleEndian.PutUint32(paramBytes[0:4], M)
+	binary.LittleEndian.PutUint32(paramBytes[4:8], K)
+	binary.LittleEndian.PutUint32(paramBytes[8:12], N)
+	bufferParams := b.createUniformBuffer(paramBytes)
 	defer bufferParams.Release()
 
 	aSize := uint64(a.ByteSize())         //nolint:gosec // G115: integer overflow conversion int -> uint64
 	otherSize := uint64(other.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
+
+	var workgroupsX, workgroupsY uint32
+	var entry pipelineEntry
+
+	if b.subgroupsEnabled {
+		// Subgroup cooperative K-reduction: one workgroup(32 threads) per output element.
+		// Dispatch (N, M, 1) — col along X, row along Y.
+		shader := b.compileShader("matmul_subgroup", matmulSubgroupShader)
+		entry = b.getOrCreatePipeline("matmul_subgroup", shader, bglBinary)
+		workgroupsX = N
+		workgroupsY = M
+	} else {
+		// Scalar K-loop: 16×16 tile dispatch.
+		shader := b.compileShader("matmul", matmulShader)
+		entry = b.getOrCreatePipeline("matmul", shader, bglBinary)
+		workgroupsX = uint32(math.Ceil(float64(N) / 16.0))
+		workgroupsY = uint32(math.Ceil(float64(M) / 16.0))
+	}
+
 	bg := b.createBindGroupFromBuffers(entry.layout, []bindGroupBuffer{
 		bufBinding(bufferA, aSize),
 		bufBinding(bufferOther, otherSize),
@@ -694,9 +710,6 @@ func (b *Backend) runMatMul(a, other *tensor.RawTensor) (*tensor.RawTensor, erro
 	})
 	defer bg.Release()
 
-	// 2D workgroup dispatch: 16×16 tiles.
-	workgroupsX := uint32(math.Ceil(float64(N) / 16.0))
-	workgroupsY := uint32(math.Ceil(float64(M) / 16.0))
 	resultData := b.execComputeAndRead(entry.pipeline, bg, workgroupsX, workgroupsY, 1, bufferResult, resultSize)
 
 	result, err := tensor.NewRaw(resultShape, tensor.Float32, tensor.WebGPU)
@@ -984,9 +997,6 @@ func (b *Backend) runBatchMatMul(a, other *tensor.RawTensor) (*tensor.RawTensor,
 		resultShape = tensor.Shape{shapeA[0], shapeA[1], int(M), int(N)}
 	}
 
-	shader := b.compileShader("batchMatMul", batchMatMulShader)
-	entry := b.getOrCreatePipeline("batchMatMul", shader, bglBinary)
-
 	bufferA := b.createBuffer(a.Data(), gputypes.BufferUsageStorage|gputypes.BufferUsageCopySrc)
 	defer bufferA.Release()
 
@@ -1003,16 +1013,35 @@ func (b *Backend) runBatchMatMul(a, other *tensor.RawTensor) (*tensor.RawTensor,
 	}
 	defer bufferResult.Release()
 
-	params := make([]byte, 16)
-	binary.LittleEndian.PutUint32(params[0:4], batch)
-	binary.LittleEndian.PutUint32(params[4:8], M)
-	binary.LittleEndian.PutUint32(params[8:12], K)
-	binary.LittleEndian.PutUint32(params[12:16], N)
-	bufferParams := b.createUniformBuffer(params)
+	paramBytes := make([]byte, 16)
+	binary.LittleEndian.PutUint32(paramBytes[0:4], batch)
+	binary.LittleEndian.PutUint32(paramBytes[4:8], M)
+	binary.LittleEndian.PutUint32(paramBytes[8:12], K)
+	binary.LittleEndian.PutUint32(paramBytes[12:16], N)
+	bufferParams := b.createUniformBuffer(paramBytes)
 	defer bufferParams.Release()
 
 	aSize := uint64(a.ByteSize())         //nolint:gosec // G115: integer overflow conversion int -> uint64
 	otherSize := uint64(other.ByteSize()) //nolint:gosec // G115: integer overflow conversion int -> uint64
+
+	var workgroupsX, workgroupsY uint32
+	var entry pipelineEntry
+
+	if b.subgroupsEnabled {
+		// Subgroup cooperative K-reduction: one workgroup(32 threads) per output element.
+		// Dispatch (N, M, batch) — col along X, row along Y, batch along Z.
+		shader := b.compileShader("batchMatMul_subgroup", batchMatMulSubgroupShader)
+		entry = b.getOrCreatePipeline("batchMatMul_subgroup", shader, bglBinary)
+		workgroupsX = N
+		workgroupsY = M
+	} else {
+		// Scalar K-loop: (N+7)/8 × (M+7)/8 × batch dispatch.
+		shader := b.compileShader("batchMatMul", batchMatMulShader)
+		entry = b.getOrCreatePipeline("batchMatMul", shader, bglBinary)
+		workgroupsX = (N + 7) / 8
+		workgroupsY = (M + 7) / 8
+	}
+
 	bg := b.createBindGroupFromBuffers(entry.layout, []bindGroupBuffer{
 		bufBinding(bufferA, aSize),
 		bufBinding(bufferB, otherSize),
@@ -1021,9 +1050,6 @@ func (b *Backend) runBatchMatMul(a, other *tensor.RawTensor) (*tensor.RawTensor,
 	})
 	defer bg.Release()
 
-	// Dispatch: (N+7)/8 × (M+7)/8 × batch.
-	workgroupsX := (N + 7) / 8
-	workgroupsY := (M + 7) / 8
 	resultData := b.execComputeAndRead(entry.pipeline, bg, workgroupsX, workgroupsY, batch, bufferResult, resultSize)
 
 	result, err := tensor.NewRaw(resultShape, tensor.Float32, tensor.WebGPU)

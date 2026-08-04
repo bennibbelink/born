@@ -103,7 +103,7 @@ func TestSubgroupMatMulShaders_Correctness(t *testing.T) {
 
 	// Test cases covering edge cases in both scalar and subgroup paths.
 	tests := []struct {
-		name        string
+		name              string
 		rows, inner, cols int
 	}{
 		{"1x1x1", 1, 1, 1},

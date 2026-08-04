@@ -910,9 +910,6 @@ func (b *Backend) runSoftmax(input *tensor.RawTensor) (*tensor.RawTensor, error)
 
 	numClasses := uint32(input.Shape()[1]) //nolint:gosec // G115: safe, tensor dimensions are non-negative and fit in uint32
 
-	shader := b.compileShader("softmax", softmaxShader)
-	entry := b.getOrCreatePipeline("softmax", shader, bglUnary)
-
 	bufferInput := b.createBuffer(input.Data(), gputypes.BufferUsageStorage|gputypes.BufferUsageCopySrc)
 	defer bufferInput.Release()
 
@@ -926,12 +923,29 @@ func (b *Backend) runSoftmax(input *tensor.RawTensor) (*tensor.RawTensor, error)
 	}
 	defer bufferResult.Release()
 
-	// Uniform: batch_size, num_classes as u32.
-	params := make([]byte, 16)
-	binary.LittleEndian.PutUint32(params[0:4], batchSize)
-	binary.LittleEndian.PutUint32(params[4:8], numClasses)
-	bufferParams := b.createUniformBuffer(params)
+	// Uniform: batch_size, num_classes, two padding u32 to reach 16-byte std140 alignment.
+	paramBytes := make([]byte, 16)
+	binary.LittleEndian.PutUint32(paramBytes[0:4], batchSize)
+	binary.LittleEndian.PutUint32(paramBytes[4:8], numClasses)
+	bufferParams := b.createUniformBuffer(paramBytes)
 	defer bufferParams.Release()
+
+	var workgroups uint32
+	var entry pipelineEntry
+
+	if b.subgroupsEnabled {
+		// Subgroup cooperative reduction: one workgroup (32 lanes) per row.
+		// Dispatch (batchSize, 1, 1) — each workgroup handles exactly one row.
+		shader := b.compileShader("softmax_subgroup", softmaxSubgroupShader)
+		entry = b.getOrCreatePipeline("softmax_subgroup", shader, bglUnary)
+		workgroups = batchSize
+	} else {
+		// Scalar per-thread: one thread per row.
+		// Dispatch (ceil(batchSize/256), 1, 1).
+		shader := b.compileShader("softmax", softmaxShader)
+		entry = b.getOrCreatePipeline("softmax", shader, bglUnary)
+		workgroups = (batchSize + workgroupSize - 1) / workgroupSize
+	}
 
 	bg := b.createBindGroupFromBuffers(entry.layout, []bindGroupBuffer{
 		bufBinding(bufferInput, resultSize),
@@ -940,8 +954,6 @@ func (b *Backend) runSoftmax(input *tensor.RawTensor) (*tensor.RawTensor, error)
 	})
 	defer bg.Release()
 
-	// Each workgroup handles one row (batch sample).
-	workgroups := (batchSize + workgroupSize - 1) / workgroupSize
 	resultData := b.execComputeAndRead(entry.pipeline, bg, workgroups, 1, 1, bufferResult, resultSize)
 
 	result, err := tensor.NewRaw(input.Shape(), tensor.Float32, tensor.WebGPU)

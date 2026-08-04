@@ -755,6 +755,84 @@ fn main(
 }
 `
 
+// softmaxSubgroupShader applies softmax along rows using subgroup cooperative reductions.
+//
+// Design: input shape [batch_size, num_classes].
+//
+// One workgroup of 32 threads processes one row. All 32 lanes cooperate across
+// the num_classes dimension using strided iteration (lane i handles classes
+// i, i+32, i+64, …). Three phases:
+//
+//  1. Max reduction: each lane accumulates a local max, subgroupMax() finds the
+//     global max across the row in a single instruction.
+//  2. Exp-sum: each lane computes exp(x - global_max) for its classes and
+//     accumulates a local sum, subgroupAdd() finds the global sum.
+//  3. Normalize: each lane writes exp(x - global_max) / global_sum for its
+//     classes (no reduction needed).
+//
+// Dispatch: (batch_size, 1, 1) workgroups — one per row.
+//
+// Hardware requirements: same as matmulSubgroupShader (FeatureSubgroupOperations,
+// subgroup_size >= 32). On hardware where subgroups are unavailable the caller
+// falls back to softmaxShader.
+const softmaxSubgroupShader = `
+enable subgroups;
+
+@group(0) @binding(0) var<storage, read> input: array<f32>;
+@group(0) @binding(1) var<storage, read_write> result: array<f32>;
+
+struct Params {
+    batch_size:   u32,
+    num_classes:  u32,
+    // _pad fields align struct to 16 bytes (std140).
+    _pad1: u32,
+    _pad2: u32,
+}
+@group(0) @binding(2) var<uniform> params: Params;
+
+// subgroupSize must match matmulSubgroupShader: 32 lanes per workgroup.
+const subgroupSize: u32 = 32u;
+
+@compute @workgroup_size(32)
+fn main(
+    @builtin(workgroup_id)           wid:   vec3<u32>,
+    @builtin(subgroup_invocation_id) sg_id: u32,
+) {
+    let row = wid.x;
+    if (row >= params.batch_size) { return; }
+    let offset = row * params.num_classes;
+
+    // Phase 1: cooperative max reduction across num_classes.
+    // Each lane processes the slice [sg_id, sg_id+32, sg_id+64, …].
+    var local_max: f32 = -3.402823466e+38; // -FLT_MAX
+    var i = sg_id;
+    loop {
+        if (i >= params.num_classes) { break; }
+        local_max = max(local_max, input[offset + i]);
+        i += subgroupSize;
+    }
+    let global_max = subgroupMax(local_max);
+
+    // Phase 2: cooperative exp-sum.
+    var local_sum: f32 = 0.0;
+    i = sg_id;
+    loop {
+        if (i >= params.num_classes) { break; }
+        local_sum += exp(input[offset + i] - global_max);
+        i += subgroupSize;
+    }
+    let global_sum = subgroupAdd(local_sum);
+
+    // Phase 3: normalize — each lane writes its slice; no reduction needed.
+    i = sg_id;
+    loop {
+        if (i >= params.num_classes) { break; }
+        result[offset + i] = exp(input[offset + i] - global_max) / global_sum;
+        i += subgroupSize;
+    }
+}
+`
+
 // greaterShader performs element-wise greater-than comparison: result = a > b ? 1.0 : 0.0.
 const greaterShader = `
 @group(0) @binding(0) var<storage, read> a: array<f32>;

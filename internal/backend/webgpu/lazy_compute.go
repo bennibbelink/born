@@ -646,9 +646,6 @@ func (b *Backend) runSoftmaxLazy(input *tensor.RawTensor) (*tensor.RawTensor, er
 	batchSize := uint32(input.Shape()[0])  //nolint:gosec // G115: safe, tensor dims are small positive ints
 	numClasses := uint32(input.Shape()[1]) //nolint:gosec // G115: safe, tensor dims are small positive ints
 
-	shader := b.compileShader("softmax", softmaxShader)
-	entry := b.getOrCreatePipeline("softmax", shader, bglUnary)
-
 	// Get or create GPU buffer for input. Cached CPU tensors reuse the same buffer.
 	inputResult := b.getOrCreateInputBuffer(input)
 
@@ -670,10 +667,27 @@ func (b *Backend) runSoftmaxLazy(input *tensor.RawTensor) (*tensor.RawTensor, er
 	}
 
 	// Create uniform buffer for params. Ownership transfers to addComputePassToEncoder.
-	params := make([]byte, 16)
-	putUint32LE(params[0:4], batchSize)
-	putUint32LE(params[4:8], numClasses)
-	bufferParams := b.createUniformBuffer(params)
+	paramBytes := make([]byte, 16)
+	putUint32LE(paramBytes[0:4], batchSize)
+	putUint32LE(paramBytes[4:8], numClasses)
+	bufferParams := b.createUniformBuffer(paramBytes)
+
+	var workgroups uint32
+	var entry pipelineEntry
+
+	if b.subgroupsEnabled {
+		// Subgroup cooperative reduction: one workgroup (32 lanes) per row.
+		// Dispatch (batchSize, 1, 1) — each workgroup handles exactly one row.
+		shader := b.compileShader("softmax_subgroup", softmaxSubgroupShader)
+		entry = b.getOrCreatePipeline("softmax_subgroup", shader, bglUnary)
+		workgroups = batchSize
+	} else {
+		// Scalar per-thread: one thread per row.
+		// Dispatch (ceil(batchSize/256), 1, 1).
+		shader := b.compileShader("softmax", softmaxShader)
+		entry = b.getOrCreatePipeline("softmax", shader, bglUnary)
+		workgroups = (batchSize + workgroupSize - 1) / workgroupSize
+	}
 
 	bg := b.createBindGroupFromBuffers(entry.layout, []bindGroupBuffer{
 		bufBinding(inputResult.buffer, resultSize),
@@ -682,8 +696,6 @@ func (b *Backend) runSoftmaxLazy(input *tensor.RawTensor) (*tensor.RawTensor, er
 	})
 	// NO defer bg.Release() — ownership transfers to encoder batch via lazyResources.
 
-	// Each workgroup handles one row (batch sample).
-	workgroups := (batchSize + workgroupSize - 1) / workgroupSize
 	return b.addComputePassToEncoder(entry.pipeline, bg, workgroups, 1, 1, bufferResult, resultSize, input.Shape(), tensor.Float32,
 		lazyResources{
 			buffers:    append(transientBufs, bufferParams),

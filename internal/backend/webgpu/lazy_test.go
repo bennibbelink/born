@@ -9,6 +9,13 @@ import (
 	"github.com/born-ml/born/internal/tensor"
 )
 
+// isLazyTensor returns true if the RawTensor has unrealized GPU data.
+// Replaces the legacy RawTensor.IsLazy() method removed in ADR-019 Phase 4.
+func isLazyTensor(t *tensor.RawTensor) bool {
+	gpuData, ok := t.BackendData().(*LazyGPUData)
+	return ok && gpuData != nil && !gpuData.IsRealized()
+}
+
 // TestLazyModeAdd tests that lazy mode doesn't call readBuffer during Add.
 func TestLazyModeAdd(t *testing.T) {
 	if !computeAvailable {
@@ -49,7 +56,7 @@ func TestLazyModeAdd(t *testing.T) {
 	addTime := time.Since(start)
 
 	// The result should be lazy (unrealized)
-	if !result.IsLazy() {
+	if !isLazyTensor(result) {
 		t.Error("Result should be lazy (unrealized)")
 	}
 
@@ -66,7 +73,7 @@ func TestLazyModeAdd(t *testing.T) {
 	realizeTime := time.Since(start)
 
 	// Result should now be realized
-	if result.IsLazy() {
+	if isLazyTensor(result) {
 		t.Error("Result should be realized after Data() call")
 	}
 
@@ -110,7 +117,7 @@ func TestLazyModeChain(t *testing.T) {
 	chainTime := time.Since(start)
 
 	// All results should be lazy
-	if !c.IsLazy() {
+	if !isLazyTensor(c) {
 		t.Error("c should be lazy")
 	}
 	// Note: d and e may or may not be lazy depending on implementation
@@ -168,7 +175,7 @@ func TestEagerModeAdd(t *testing.T) {
 	result := backend.Add(a, b)
 
 	// In eager mode, result should NOT be lazy
-	if result.IsLazy() {
+	if isLazyTensor(result) {
 		t.Error("Result should NOT be lazy in eager mode")
 	}
 

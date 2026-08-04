@@ -74,8 +74,17 @@ func Backward[T tensor.DType, B BackwardCapable](t *tensor.Tensor[T, B], backend
 // ReleaseGradients releases GPU buffers for all gradient tensors in the map.
 // Call after optimizer.Step(grads) — gradient tensors are no longer needed and
 // their GPU buffers should be freed immediately rather than waiting for GC.
-func ReleaseGradients(grads map[*tensor.RawTensor]*tensor.RawTensor) {
+//
+// Uses tensor.BackendReleaser when the backend implements it (ADR-019 Phase 4).
+func ReleaseGradients(grads map[*tensor.RawTensor]*tensor.RawTensor, backend ...tensor.Backend) {
+	var br tensor.BackendReleaser
+	if len(backend) > 0 && backend[0] != nil {
+		br, _ = any(backend[0]).(tensor.BackendReleaser)
+	}
 	for _, grad := range grads {
-		grad.ReleaseGPU()
+		if br != nil {
+			br.ReleaseBackendData(grad.BackendData())
+			grad.SetBackendData(nil)
+		}
 	}
 }

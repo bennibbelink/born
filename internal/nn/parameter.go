@@ -36,11 +36,14 @@ type Parameter[B tensor.Backend] struct {
 //
 // Returns a new Parameter.
 func NewParameter[B tensor.Backend](name string, t *tensor.Tensor[float32, B]) *Parameter[B] {
-	t.Raw().SetGPUPersistent(true)
+	// Mark GPU buffer as persistent so ReclaimMemory does not release it (ADR-019 Phase 4).
+	if br, ok := any(t.Backend()).(tensor.BackendReleaser); ok {
+		br.SetPersistent(t.Raw().BackendData(), true)
+	}
 	return &Parameter[B]{
 		name:   name,
 		tensor: t,
-		grad:   nil, // Gradient allocated on first backward pass
+		grad:   nil, // Gradient allocated on first backward pass.
 	}
 }
 
@@ -81,12 +84,20 @@ func (p *Parameter[B]) SetGrad(grad *tensor.Tensor[float32, B]) {
 // Callers must ensure the new tensor has the same shape and dtype as the
 // original, otherwise downstream operations will panic.
 func (p *Parameter[B]) SetTensor(t *tensor.Tensor[float32, B]) {
-	// Release old GPU buffer immediately — do NOT wait for GC.
+	br, _ := any(t.Backend()).(tensor.BackendReleaser)
+
+	// Release old GPU buffer immediately — do NOT wait for GC (ADR-019 Phase 4).
 	if p.tensor != nil {
-		p.tensor.Raw().ReleaseGPU()
+		if br != nil {
+			br.ReleaseBackendData(p.tensor.Raw().BackendData())
+			p.tensor.Raw().SetBackendData(nil)
+		}
 	}
 	p.tensor = t.Detach()
-	p.tensor.Raw().SetGPUPersistent(true)
+	// Mark the new parameter buffer as persistent so ReclaimMemory skips it.
+	if br != nil {
+		br.SetPersistent(p.tensor.Raw().BackendData(), true)
+	}
 }
 
 // ZeroGrad clears the gradient tensor.

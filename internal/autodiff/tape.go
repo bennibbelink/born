@@ -53,33 +53,10 @@ func (t *GradientTape) Record(op ops.Operation) {
 // Clear resets the tape, removing all recorded operations.
 // Recording state is preserved.
 //
-// All intermediate GPU buffers from forward pass outputs are released
-// immediately via ReleaseGPU. Parameter tensors (inputs that are not outputs
-// of other ops) are not touched. This is the primary mechanism for
-// deterministic GPU memory reclamation under ADR-015.
+// GPU buffer release for intermediate outputs is handled via the BackendReleaser
+// path in callers (parameter.go, adam.go, sgd.go) and by Backend.ReclaimMemory()
+// which releases all non-persistent live GPU tensors (ADR-019 Phase 4).
 func (t *GradientTape) Clear() {
-	// Collect parameter pointers (inputs that are not produced by any op on the tape).
-	outputs := make(map[*tensor.RawTensor]struct{}, len(t.operations))
-	for _, op := range t.operations {
-		if mop, ok := op.(ops.MultiOutputOperation); ok {
-			for _, o := range mop.Outputs() {
-				outputs[o] = struct{}{}
-			}
-		} else {
-			outputs[op.Output()] = struct{}{}
-		}
-	}
-
-	// Release GPU buffers for intermediate outputs, skipping persistent tensors
-	// (optimizer moments, model weights). Without this check, ClearTape kills
-	// moment GPU buffers when optimizer ops are recorded on tape.
-	for out := range outputs {
-		if gpuData := out.GPUData(); gpuData != nil && gpuData.IsPersistent() {
-			continue
-		}
-		out.ReleaseGPU()
-	}
-
 	// Nil out slice elements so GC can collect Operation objects and their
 	// referenced RawTensors. Without this, the backing array retains pointers
 	// to all operations from the previous step — each holding input/output
@@ -244,7 +221,12 @@ func (t *GradientTape) accumulateGrads(
 		}
 		if existing, ok := grads[input]; ok {
 			newGrad := backend.Add(existing, inputGrad)
-			existing.ReleaseGPU() // Release the old intermediate gradient buffer.
+			// Release the old accumulated gradient buffer now that it has been
+			// consumed by Add. Uses BackendReleaser when available (ADR-019 Phase 4).
+			if br, ok := any(backend).(tensor.BackendReleaser); ok {
+				br.ReleaseBackendData(existing.BackendData())
+				existing.SetBackendData(nil)
+			}
 			grads[input] = newGrad
 		} else {
 			grads[input] = inputGrad

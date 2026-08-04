@@ -124,6 +124,12 @@ type Backend interface {
 	// Type conversion
 	Cast(x *RawTensor, dtype DataType) *RawTensor // cast to different data type
 
+	// Materialize returns CPU-resident bytes for a tensor.
+	// For CPU backends: returns the buffer data directly (zero-copy).
+	// For GPU backends: triggers a GPU→CPU readback and returns the result.
+	// The returned slice length equals shape.NumElements() * dtype.Size().
+	Materialize(t *RawTensor) ([]byte, error)
+
 	// Metadata
 	Name() string
 	Device() Device
@@ -140,4 +146,28 @@ type MemoryReclaimer interface {
 	// called after releasing a batch of intermediate tensors (e.g. at the
 	// end of a training step) to ensure GPU memory is actually freed.
 	ReclaimMemory()
+}
+
+// BackendReleaser is an optional interface for backends that manage device
+// memory (GPU, accelerator). It provides backend-agnostic release and
+// persistence control without callers having to know the concrete backend type.
+//
+// Callers in autodiff, optimizers, and nn packages should prefer this interface
+// over direct ReleaseGPU/GPUData/SetGPUPersistent calls (ADR-019 Phase 3).
+// CPU backends implement all methods as no-ops.
+type BackendReleaser interface {
+	// ReleaseBackendData releases backend-specific resources for a tensor.
+	// For GPU backends: schedules the GPU buffer for deferred release.
+	// For CPU backends: no-op.
+	ReleaseBackendData(data any)
+
+	// SetPersistent marks backend data as persistent, surviving ReclaimMemory.
+	// For GPU backends: prevents the buffer from being released during bulk cleanup.
+	// For CPU backends: no-op.
+	SetPersistent(data any, persistent bool)
+
+	// IsPersistent reports whether backend data is marked as persistent.
+	// For GPU backends: returns the persistent flag of the GPU buffer.
+	// For CPU backends: always returns false.
+	IsPersistent(data any) bool
 }

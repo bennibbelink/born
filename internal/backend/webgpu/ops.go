@@ -175,7 +175,7 @@ func (b *Backend) Reshape(t *tensor.RawTensor, newShape tensor.Shape) *tensor.Ra
 
 	// LazyMode GPU path: source lives on GPU — perform GPU-to-GPU copy (zero CPU).
 	if b.LazyMode {
-		if gpuData := t.GPUData(); gpuData != nil && !gpuData.IsRealized() {
+		if gpuData, ok := t.BackendData().(*LazyGPUData); ok && gpuData != nil && !gpuData.IsRealized() {
 			if result, err := b.runReshapeLazy(t, newShape); err == nil {
 				return result
 			}

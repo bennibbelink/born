@@ -339,9 +339,15 @@ func NewModel[B tensor.Backend](cfg Config, backend B, opts ...Option[B]) *Model
 // Call when the model is no longer needed to reclaim GPU memory immediately
 // instead of waiting for GC. Safe to call multiple times.
 func (m *Model[B]) Release() {
+	br, _ := any(m.backend).(tensor.BackendReleaser)
 	release := func(params []*nn.Parameter[B]) {
 		for _, p := range params {
-			p.Tensor().Raw().ReleaseGPU()
+			raw := p.Tensor().Raw()
+			// Release GPU buffer immediately via BackendReleaser (ADR-019 Phase 4).
+			if br != nil {
+				br.ReleaseBackendData(raw.BackendData())
+				raw.SetBackendData(nil)
+			}
 		}
 	}
 	release(m.Embed.Parameters())

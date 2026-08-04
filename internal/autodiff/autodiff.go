@@ -59,17 +59,22 @@ func (b *AutodiffBackend[B]) Tape() *GradientTape {
 
 // ClearTape clears the gradient tape and reclaims GPU memory from intermediate
 // tensors. This is the recommended way to clear the tape between training steps
-// instead of calling Tape().Clear() directly. It releases all intermediate GPU
-// buffers recorded during the forward pass, then flushes the GPU command queue
-// and triggers device-side destruction of deferred buffers (ADR-015).
+// instead of calling Tape().Clear() directly.
+//
+// In ADR-019 Phase 4, GPU buffer release for tape operation outputs is no longer
+// performed by tape.Clear() itself. Instead, ClearTape() calls ReclaimMemory() on
+// the inner backend to release all non-persistent live GPU tensors (forward
+// activations, backward intermediates) in a single pass.
+//
+// Persistent tensors (model weights, optimizer moments, carry state marked with
+// .Persist()) are skipped by ReclaimMemory — their .SetPersistent(true) flag
+// prevents premature release.
 func (b *AutodiffBackend[B]) ClearTape() {
 	b.tape.Clear()
-	// Flush deferred GPU buffer releases to pool. tape.Clear() calls
-	// DeferReleaseGPUBuffer which queues buffers in activeBatch — without
-	// flushing, they stay there and are never returned to pool for reuse.
-	// Use FlushGPU (not ReclaimMemory) to avoid killing carry state tensors.
-	if flusher, ok := any(b.inner).(interface{ FlushGPU() }); ok {
-		flusher.FlushGPU()
+	// ReclaimMemory releases all non-persistent live GPU tensors (forward activations,
+	// intermediate backward results). Persistent tensors survive (ADR-019 Phase 4).
+	if reclaimer, ok := any(b.inner).(tensor.MemoryReclaimer); ok {
+		reclaimer.ReclaimMemory()
 	}
 }
 
@@ -974,9 +979,40 @@ func (b *AutodiffBackend[B]) MaxPool2DBackward(input, grad *tensor.RawTensor, ma
 	return b.inner.MaxPool2DBackward(input, grad, maxIndices, kernelSize, stride)
 }
 
+// Materialize returns CPU-resident bytes for the given tensor.
+// Delegates to the inner backend, which handles any necessary GPU→CPU readback.
+func (b *AutodiffBackend[B]) Materialize(t *tensor.RawTensor) ([]byte, error) {
+	return b.inner.Materialize(t)
+}
+
 // ReclaimMemory proxies to inner backend's MemoryReclaimer if available.
 func (b *AutodiffBackend[B]) ReclaimMemory() {
 	if reclaimer, ok := any(b.inner).(tensor.MemoryReclaimer); ok {
 		reclaimer.ReclaimMemory()
 	}
+}
+
+// ReleaseBackendData delegates to the inner backend's BackendReleaser if available.
+// Implements tensor.BackendReleaser (ADR-019 Phase 3).
+func (b *AutodiffBackend[B]) ReleaseBackendData(data any) {
+	if br, ok := any(b.inner).(tensor.BackendReleaser); ok {
+		br.ReleaseBackendData(data)
+	}
+}
+
+// SetPersistent delegates to the inner backend's BackendReleaser if available.
+// Implements tensor.BackendReleaser (ADR-019 Phase 3).
+func (b *AutodiffBackend[B]) SetPersistent(data any, persistent bool) {
+	if br, ok := any(b.inner).(tensor.BackendReleaser); ok {
+		br.SetPersistent(data, persistent)
+	}
+}
+
+// IsPersistent delegates to the inner backend's BackendReleaser if available.
+// Implements tensor.BackendReleaser (ADR-019 Phase 3).
+func (b *AutodiffBackend[B]) IsPersistent(data any) bool {
+	if br, ok := any(b.inner).(tensor.BackendReleaser); ok {
+		return br.IsPersistent(data)
+	}
+	return false
 }

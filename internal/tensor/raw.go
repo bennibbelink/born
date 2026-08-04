@@ -191,7 +191,6 @@ func (r *RawTensor) Data() []byte {
 	return r.buffer.data[r.offset:]
 }
 
-
 // BackendData returns the opaque backend-specific data, or nil.
 // The returned value is backend-owned; callers must not modify it.
 func (r *RawTensor) BackendData() any {

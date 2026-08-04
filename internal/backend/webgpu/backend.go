@@ -46,7 +46,7 @@ type pendingSubmission struct {
 	cmdBuffer  *wgpu.CommandBuffer
 	resultBufs []*wgpu.Buffer    // params + transient inputs, released after Submit
 	bindGroups []*wgpu.BindGroup // released after Submit
-	lazyDatas  []*LazyGPUData   // kept alive until after Submit; NOT released here
+	lazyDatas  []*LazyGPUData    // kept alive until after Submit; NOT released here
 }
 
 // encoderBatch accumulates multiple compute passes into a single CommandEncoder.
@@ -58,9 +58,9 @@ type pendingSubmission struct {
 // lazyDatas holds LazyGPUData refs to keep result buffers alive until Submit.
 type encoderBatch struct {
 	encoder    *wgpu.CommandEncoder
-	resultBufs []*wgpu.Buffer  // params + transient inputs, released after Submit
+	resultBufs []*wgpu.Buffer    // params + transient inputs, released after Submit
 	bindGroups []*wgpu.BindGroup // released after Submit
-	lazyDatas  []*LazyGPUData  // kept alive until Submit; dropped after (not released)
+	lazyDatas  []*LazyGPUData    // kept alive until Submit; dropped after (not released)
 	count      int
 	allocBytes uint64 // total GPU bytes held by this batch
 }

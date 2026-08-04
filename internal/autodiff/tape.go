@@ -73,6 +73,11 @@ func (t *GradientTape) Clear() {
 	// Release GPU buffers for intermediate outputs, skipping persistent tensors
 	// (optimizer moments, model weights). Without this check, ClearTape kills
 	// moment GPU buffers when optimizer ops are recorded on tape.
+	//
+	// NOTE (ADR-019 Phase 3): Clear() has no backend reference, so the
+	// BackendReleaser path is unavailable here. The legacy path (GPUData /
+	// ReleaseGPU) is kept intentionally and will be removed in Phase 4 once
+	// tape gains a backend reference or callers use a scope-based API.
 	for out := range outputs {
 		if gpuData := out.GPUData(); gpuData != nil && gpuData.IsPersistent() {
 			continue
@@ -244,7 +249,13 @@ func (t *GradientTape) accumulateGrads(
 		}
 		if existing, ok := grads[input]; ok {
 			newGrad := backend.Add(existing, inputGrad)
-			existing.ReleaseGPU() // Release the old intermediate gradient buffer.
+			// Backend-agnostic release (ADR-019 Phase 3): use BackendReleaser when
+			// available so callers are decoupled from GPU-specific types.
+			if br, ok := any(backend).(tensor.BackendReleaser); ok {
+				br.ReleaseBackendData(existing.BackendData())
+				existing.SetBackendData(nil)
+			}
+			existing.ReleaseGPU() // Legacy path — kept until Phase 4.
 			grads[input] = newGrad
 		} else {
 			grads[input] = inputGrad

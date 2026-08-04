@@ -986,3 +986,28 @@ func (b *AutodiffBackend[B]) ReclaimMemory() {
 		reclaimer.ReclaimMemory()
 	}
 }
+
+// ReleaseBackendData delegates to the inner backend's BackendReleaser if available.
+// Implements tensor.BackendReleaser (ADR-019 Phase 3).
+func (b *AutodiffBackend[B]) ReleaseBackendData(data any) {
+	if br, ok := any(b.inner).(tensor.BackendReleaser); ok {
+		br.ReleaseBackendData(data)
+	}
+}
+
+// SetPersistent delegates to the inner backend's BackendReleaser if available.
+// Implements tensor.BackendReleaser (ADR-019 Phase 3).
+func (b *AutodiffBackend[B]) SetPersistent(data any, persistent bool) {
+	if br, ok := any(b.inner).(tensor.BackendReleaser); ok {
+		br.SetPersistent(data, persistent)
+	}
+}
+
+// IsPersistent delegates to the inner backend's BackendReleaser if available.
+// Implements tensor.BackendReleaser (ADR-019 Phase 3).
+func (b *AutodiffBackend[B]) IsPersistent(data any) bool {
+	if br, ok := any(b.inner).(tensor.BackendReleaser); ok {
+		return br.IsPersistent(data)
+	}
+	return false
+}

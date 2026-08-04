@@ -241,3 +241,15 @@ func (cpu *CPUBackend) Transpose(t *tensor.RawTensor, axes ...int) *tensor.RawTe
 func (cpu *CPUBackend) Materialize(t *tensor.RawTensor) ([]byte, error) {
 	return t.Data(), nil
 }
+
+// ReleaseBackendData is a no-op for CPUBackend (no device memory to release).
+// Implements tensor.BackendReleaser (ADR-019 Phase 3).
+func (cpu *CPUBackend) ReleaseBackendData(_ any) {}
+
+// SetPersistent is a no-op for CPUBackend (no device memory lifecycle).
+// Implements tensor.BackendReleaser (ADR-019 Phase 3).
+func (cpu *CPUBackend) SetPersistent(_ any, _ bool) {}
+
+// IsPersistent always returns false for CPUBackend (no device memory lifecycle).
+// Implements tensor.BackendReleaser (ADR-019 Phase 3).
+func (cpu *CPUBackend) IsPersistent(_ any) bool { return false }

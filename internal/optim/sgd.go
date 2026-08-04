@@ -127,8 +127,18 @@ func (s *SGD[B]) Step(grads map[*tensor.RawTensor]*tensor.RawTensor) {
 // param = param * (1 - lr * weightDecay) - lr * grad
 //
 // Pure tensor ops — no AsFloat32() / CPU readback.
-// Intermediate buffers are released immediately via ReleaseGPU() (GoMLX pattern).
+// Intermediate buffers are released immediately via releaseRaw (GoMLX pattern).
+// Backend-agnostic release via BackendReleaser when available (ADR-019 Phase 3).
 func (s *SGD[B]) updateParameter(param *nn.Parameter[B], grad *tensor.Tensor[float32, B]) {
+	br, _ := any(s.backend).(tensor.BackendReleaser)
+	releaseRaw := func(r *tensor.RawTensor) {
+		if br != nil {
+			br.ReleaseBackendData(r.BackendData())
+			r.SetBackendData(nil)
+		}
+		r.ReleaseGPU() // Legacy path — kept until Phase 4.
+	}
+
 	current := param.Tensor()
 
 	// Apply L2 weight decay as a tensor op.
@@ -141,9 +151,9 @@ func (s *SGD[B]) updateParameter(param *nn.Parameter[B], grad *tensor.Tensor[flo
 	// scaled_grad = lr * grad  (intermediate)
 	scaledGrad := grad.MulScalar(s.lr)
 	updated := current.Sub(scaledGrad)
-	scaledGrad.Raw().ReleaseGPU() // intermediate: no longer needed
+	releaseRaw(scaledGrad.Raw()) // intermediate: no longer needed
 	if decayed != nil {
-		decayed.Raw().ReleaseGPU() // intermediate: no longer needed
+		releaseRaw(decayed.Raw()) // intermediate: no longer needed
 	}
 
 	param.SetTensor(updated) // Releases old param GPU buffer internally
@@ -155,8 +165,18 @@ func (s *SGD[B]) updateParameter(param *nn.Parameter[B], grad *tensor.Tensor[flo
 // param    = param * (1 - lr * weightDecay) - lr * velocity
 //
 // Pure tensor ops — no AsFloat32() / CPU readback.
-// Intermediate buffers are released immediately via ReleaseGPU() (GoMLX pattern).
+// Intermediate buffers are released immediately via releaseRaw (GoMLX pattern).
+// Backend-agnostic release via BackendReleaser when available (ADR-019 Phase 3).
 func (s *SGD[B]) updateParameterWithMomentum(param *nn.Parameter[B], grad *tensor.Tensor[float32, B]) {
+	br, _ := any(s.backend).(tensor.BackendReleaser)
+	releaseRaw := func(r *tensor.RawTensor) {
+		if br != nil {
+			br.ReleaseBackendData(r.BackendData())
+			r.SetBackendData(nil)
+		}
+		r.ReleaseGPU() // Legacy path — kept until Phase 4.
+	}
+
 	// Get or initialize velocity buffer (zeros, same shape as parameter).
 	velocity, exists := s.velocities[param]
 	if !exists {
@@ -167,7 +187,7 @@ func (s *SGD[B]) updateParameterWithMomentum(param *nn.Parameter[B], grad *tenso
 	// newVelocity = momentum * velocity + grad
 	scaledVel := velocity.MulScalar(s.momentum)
 	newVelocity := scaledVel.Add(grad)
-	scaledVel.Raw().ReleaseGPU() // intermediate: no longer needed
+	releaseRaw(scaledVel.Raw()) // intermediate: no longer needed
 
 	current := param.Tensor()
 
@@ -181,15 +201,15 @@ func (s *SGD[B]) updateParameterWithMomentum(param *nn.Parameter[B], grad *tenso
 	// param = current - lr * newVelocity
 	scaledNewVel := newVelocity.MulScalar(s.lr)
 	updated := current.Sub(scaledNewVel)
-	scaledNewVel.Raw().ReleaseGPU() // intermediate: no longer needed
+	releaseRaw(scaledNewVel.Raw()) // intermediate: no longer needed
 	if decayed != nil {
-		decayed.Raw().ReleaseGPU() // intermediate: no longer needed
+		releaseRaw(decayed.Raw()) // intermediate: no longer needed
 	}
 
 	// Release old velocity GPU buffer immediately (GoMLX FinalizeAll pattern).
 	// Queued via DeferReleaseGPUBuffer — stays alive until after queue.Submit.
 	if velocity != nil {
-		velocity.Raw().ReleaseGPU()
+		releaseRaw(velocity.Raw())
 	}
 
 	// Persist both the new velocity and the updated parameter.

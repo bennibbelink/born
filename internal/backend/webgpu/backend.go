@@ -911,3 +911,31 @@ func (b *Backend) Conv2DKernelBackward(input, kernel, grad *tensor.RawTensor, st
 func (b *Backend) MaxPool2DBackward(input, grad *tensor.RawTensor, maxIndices []int, kernelSize, stride int) *tensor.RawTensor {
 	panic("webgpu: MaxPool2DBackward not implemented")
 }
+
+// ReleaseBackendData schedules the GPU buffer for deferred release.
+// Implements tensor.BackendReleaser (ADR-019 Phase 3).
+// data must be a *tensor.LazyGPUData created by this backend; other types are ignored.
+func (b *Backend) ReleaseBackendData(data any) {
+	if gpuData, ok := data.(*tensor.LazyGPUData); ok && gpuData != nil {
+		gpuData.ScheduleRelease()
+	}
+}
+
+// SetPersistent marks a GPU buffer as persistent, surviving ReclaimMemory.
+// Implements tensor.BackendReleaser (ADR-019 Phase 3).
+// data must be a *tensor.LazyGPUData; other types are ignored.
+func (b *Backend) SetPersistent(data any, persistent bool) {
+	if gpuData, ok := data.(*tensor.LazyGPUData); ok && gpuData != nil {
+		gpuData.SetPersistent(persistent)
+	}
+}
+
+// IsPersistent reports whether a GPU buffer is marked as persistent.
+// Implements tensor.BackendReleaser (ADR-019 Phase 3).
+// data must be a *tensor.LazyGPUData; other types return false.
+func (b *Backend) IsPersistent(data any) bool {
+	if gpuData, ok := data.(*tensor.LazyGPUData); ok && gpuData != nil {
+		return gpuData.IsPersistent()
+	}
+	return false
+}

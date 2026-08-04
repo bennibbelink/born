@@ -195,13 +195,27 @@ func (a *Adam[B]) updateParameter(
 	m, v *tensor.Tensor[float32, B],
 	biasCorrection1, biasCorrection2 float32,
 ) {
+	// BackendReleaser is used when available for backend-agnostic release
+	// (ADR-019 Phase 3). Legacy ReleaseGPU calls are kept as fallback until Phase 4.
+	br, _ := any(a.backend).(tensor.BackendReleaser)
+
+	// releaseRaw is a helper that uses the BackendReleaser path when available,
+	// falling back to the legacy ReleaseGPU path.
+	releaseRaw := func(r *tensor.RawTensor) {
+		if br != nil {
+			br.ReleaseBackendData(r.BackendData())
+			r.SetBackendData(nil)
+		}
+		r.ReleaseGPU() // Legacy path — kept until Phase 4.
+	}
+
 	// Update biased first moment estimate.
 	// newM = beta1 * m + (1 - beta1) * grad
 	scaledM := m.MulScalar(a.beta1)
 	scaledGradM := grad.MulScalar(float32(1.0) - a.beta1)
 	newM := scaledM.Add(scaledGradM)
-	scaledM.Raw().ReleaseGPU()     // intermediate: no longer needed
-	scaledGradM.Raw().ReleaseGPU() // intermediate: no longer needed
+	releaseRaw(scaledM.Raw())     // intermediate: no longer needed
+	releaseRaw(scaledGradM.Raw()) // intermediate: no longer needed
 
 	// Update biased second raw moment estimate.
 	// newV = beta2 * v + (1 - beta2) * grad²
@@ -209,9 +223,9 @@ func (a *Adam[B]) updateParameter(
 	scaledV := v.MulScalar(a.beta2)
 	scaledGradSq := gradSquared.MulScalar(float32(1.0) - a.beta2)
 	newV := scaledV.Add(scaledGradSq)
-	gradSquared.Raw().ReleaseGPU()  // intermediate: consumed by scaledGradSq
-	scaledV.Raw().ReleaseGPU()      // intermediate: no longer needed
-	scaledGradSq.Raw().ReleaseGPU() // intermediate: no longer needed
+	releaseRaw(gradSquared.Raw())  // intermediate: consumed by scaledGradSq
+	releaseRaw(scaledV.Raw())      // intermediate: no longer needed
+	releaseRaw(scaledGradSq.Raw()) // intermediate: no longer needed
 
 	// Compute bias-corrected moment estimates.
 	// mHat = newM / biasCorrection1  →  newM * (1 / biasCorrection1)
@@ -221,16 +235,16 @@ func (a *Adam[B]) updateParameter(
 
 	// denom = sqrt(vHat) + eps
 	sqrtVHat := vHat.Sqrt()
-	vHat.Raw().ReleaseGPU() // intermediate: consumed by sqrtVHat
+	releaseRaw(vHat.Raw()) // intermediate: consumed by sqrtVHat
 	denom := sqrtVHat.AddScalar(a.eps)
-	sqrtVHat.Raw().ReleaseGPU() // intermediate: no longer needed
+	releaseRaw(sqrtVHat.Raw()) // intermediate: no longer needed
 
 	// adaptive update = lr * mHat / denom
 	mHatDivDenom := mHat.Div(denom)
-	mHat.Raw().ReleaseGPU()  // intermediate: no longer needed
-	denom.Raw().ReleaseGPU() // intermediate: no longer needed
+	releaseRaw(mHat.Raw())  // intermediate: no longer needed
+	releaseRaw(denom.Raw()) // intermediate: no longer needed
 	adaptiveUpdate := mHatDivDenom.MulScalar(a.lr)
-	mHatDivDenom.Raw().ReleaseGPU() // intermediate: no longer needed
+	releaseRaw(mHatDivDenom.Raw()) // intermediate: no longer needed
 
 	// Apply decoupled weight decay (AdamW-style) as a tensor op, then subtract update.
 	current := param.Tensor()
@@ -242,24 +256,29 @@ func (a *Adam[B]) updateParameter(
 
 	updated := current.Sub(adaptiveUpdate)
 	if decayed != nil {
-		decayed.Raw().ReleaseGPU() // intermediate: no longer needed
+		releaseRaw(decayed.Raw()) // intermediate: no longer needed
 	}
-	adaptiveUpdate.Raw().ReleaseGPU() // intermediate: no longer needed
+	releaseRaw(adaptiveUpdate.Raw()) // intermediate: no longer needed
 
 	// Release old moment and param GPU buffers immediately (GoMLX FinalizeAll pattern).
 	// The buffers are queued via DeferReleaseGPUBuffer — they remain alive until
 	// after queue.Submit, preventing use-after-release in the pending encoder batch.
 	if m != nil {
-		m.Raw().ReleaseGPU()
+		releaseRaw(m.Raw())
 	}
 	if v != nil {
-		v.Raw().ReleaseGPU()
+		releaseRaw(v.Raw())
 	}
 
 	// Persist updated moments and parameter — no CPU readback.
 	// Mark moments as persistent so ReclaimMemory does not release them.
-	newM.Raw().SetGPUPersistent(true)
-	newV.Raw().SetGPUPersistent(true)
+	// Backend-agnostic persistence (ADR-019 Phase 3).
+	if br != nil {
+		br.SetPersistent(newM.Raw().BackendData(), true)
+		br.SetPersistent(newV.Raw().BackendData(), true)
+	}
+	newM.Raw().SetGPUPersistent(true) // Legacy path — kept until Phase 4.
+	newV.Raw().SetGPUPersistent(true) // Legacy path — kept until Phase 4.
 	a.m[param] = newM
 	a.v[param] = newV
 	param.SetTensor(updated) // Releases old param GPU buffer internally

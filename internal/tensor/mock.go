@@ -6,8 +6,9 @@ import (
 	"math"
 )
 
-// Verify that MockBackend implements Backend.
+// Verify that MockBackend implements Backend and BackendReleaser.
 var _ Backend = (*MockBackend)(nil)
+var _ BackendReleaser = (*MockBackend)(nil)
 
 // MockBackend is a simple backend for testing.
 // It implements all operations naively for correctness verification.
@@ -1712,6 +1713,18 @@ func (m *MockBackend) ScatterAdd(dest *RawTensor, dim int, indices, src *RawTens
 func (m *MockBackend) Materialize(t *RawTensor) ([]byte, error) {
 	return t.Data(), nil
 }
+
+// ReleaseBackendData is a no-op for MockBackend (no device memory to release).
+// Implements BackendReleaser (ADR-019 Phase 3).
+func (m *MockBackend) ReleaseBackendData(_ any) {}
+
+// SetPersistent is a no-op for MockBackend (no device memory lifecycle).
+// Implements BackendReleaser (ADR-019 Phase 3).
+func (m *MockBackend) SetPersistent(_ any, _ bool) {}
+
+// IsPersistent always returns false for MockBackend (no device memory lifecycle).
+// Implements BackendReleaser (ADR-019 Phase 3).
+func (m *MockBackend) IsPersistent(_ any) bool { return false }
 
 // Conv2DInputBackward computes gradient w.r.t. input for Conv2D.
 // Stub implementation for MockBackend (test-only).

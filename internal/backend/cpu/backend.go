@@ -235,3 +235,9 @@ func (cpu *CPUBackend) Transpose(t *tensor.RawTensor, axes ...int) *tensor.RawTe
 
 	return result
 }
+
+// Materialize returns CPU-resident bytes for the given tensor.
+// CPUBackend is always CPU-resident, so this delegates to Data() directly (zero-copy).
+func (cpu *CPUBackend) Materialize(t *tensor.RawTensor) ([]byte, error) {
+	return t.Data(), nil
+}

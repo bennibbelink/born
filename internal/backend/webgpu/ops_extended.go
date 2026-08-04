@@ -3,6 +3,8 @@
 package webgpu
 
 import (
+	"fmt"
+
 	"github.com/born-ml/born/internal/tensor"
 )
 
@@ -425,4 +427,18 @@ func (b *Backend) castToInt32(x, result *tensor.RawTensor) {
 	default:
 		panic("webgpu: Cast: unsupported source type for int32: " + x.DType().String())
 	}
+}
+
+// Materialize returns CPU-resident bytes for the given tensor.
+// If the tensor has unrealized lazy GPU data, a GPU→CPU readback is triggered.
+// For tensors that are already CPU-resident, Data() is returned directly (zero-copy).
+func (b *Backend) Materialize(t *tensor.RawTensor) ([]byte, error) {
+	if t.GPUData() != nil && !t.GPUData().IsRealized() {
+		data, err := t.GPUData().Realize()
+		if err != nil {
+			return nil, fmt.Errorf("webgpu: Materialize: GPU readback failed: %w", err)
+		}
+		return data, nil
+	}
+	return t.Data(), nil
 }

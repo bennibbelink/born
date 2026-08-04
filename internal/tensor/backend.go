@@ -124,6 +124,12 @@ type Backend interface {
 	// Type conversion
 	Cast(x *RawTensor, dtype DataType) *RawTensor // cast to different data type
 
+	// Materialize returns CPU-resident bytes for a tensor.
+	// For CPU backends: returns the buffer data directly (zero-copy).
+	// For GPU backends: triggers a GPU→CPU readback and returns the result.
+	// The returned slice length equals shape.NumElements() * dtype.Size().
+	Materialize(t *RawTensor) ([]byte, error)
+
 	// Metadata
 	Name() string
 	Device() Device

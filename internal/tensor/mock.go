@@ -1707,6 +1707,12 @@ func (m *MockBackend) ScatterAdd(dest *RawTensor, dim int, indices, src *RawTens
 	return result
 }
 
+// Materialize returns CPU-resident bytes for the given tensor.
+// MockBackend is always CPU-resident, so this delegates to Data() directly.
+func (m *MockBackend) Materialize(t *RawTensor) ([]byte, error) {
+	return t.Data(), nil
+}
+
 // Conv2DInputBackward computes gradient w.r.t. input for Conv2D.
 // Stub implementation for MockBackend (test-only).
 func (m *MockBackend) Conv2DInputBackward(_, _, _ *RawTensor, _, _ int) *RawTensor {

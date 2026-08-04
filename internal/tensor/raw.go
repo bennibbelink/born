@@ -85,6 +85,7 @@ type RawTensor struct {
 	offset          int           // Offset for slicing/views
 	gpuData         *LazyGPUData  // Lazy GPU data (nil for CPU tensors)
 	gpuPersistDefer bool          // Deferred persistence: applied when gpuData is first set
+	backendData     any           // Opaque backend-owned data (managed by backend, not RawTensor).
 }
 
 // NewRaw creates a new RawTensor with the given shape and type.
@@ -218,6 +219,18 @@ func (r *RawTensor) SetGPUPersistent(persistent bool) {
 	}
 }
 
+// BackendData returns the opaque backend-specific data, or nil.
+// The returned value is backend-owned; callers must not modify it.
+func (r *RawTensor) BackendData() any {
+	return r.backendData
+}
+
+// SetBackendData sets the opaque backend-specific data.
+// The backend is responsible for lifecycle management of the stored value.
+func (r *RawTensor) SetBackendData(data any) {
+	r.backendData = data
+}
+
 // AsFloat32 interprets the data as []float32.
 // Panics if the tensor's dtype is not Float32.
 // For lazy GPU tensors, this triggers data transfer from GPU to CPU.
@@ -312,13 +325,14 @@ func (r *RawTensor) Clone() *RawTensor {
 		r.gpuData.AddRef()
 	}
 	return &RawTensor{
-		buffer:  r.buffer,
-		shape:   r.shape.Clone(),
-		stride:  append([]int(nil), r.stride...),
-		dtype:   r.dtype,
-		device:  r.device,
-		offset:  r.offset,
-		gpuData: r.gpuData,
+		buffer:      r.buffer,
+		shape:       r.shape.Clone(),
+		stride:      append([]int(nil), r.stride...),
+		dtype:       r.dtype,
+		device:      r.device,
+		offset:      r.offset,
+		gpuData:     r.gpuData,
+		backendData: r.backendData, // Shared reference; backend manages lifecycle.
 	}
 }
 

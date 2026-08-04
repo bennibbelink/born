@@ -974,6 +974,12 @@ func (b *AutodiffBackend[B]) MaxPool2DBackward(input, grad *tensor.RawTensor, ma
 	return b.inner.MaxPool2DBackward(input, grad, maxIndices, kernelSize, stride)
 }
 
+// Materialize returns CPU-resident bytes for the given tensor.
+// Delegates to the inner backend, which handles any necessary GPU→CPU readback.
+func (b *AutodiffBackend[B]) Materialize(t *tensor.RawTensor) ([]byte, error) {
+	return b.inner.Materialize(t)
+}
+
 // ReclaimMemory proxies to inner backend's MemoryReclaimer if available.
 func (b *AutodiffBackend[B]) ReclaimMemory() {
 	if reclaimer, ok := any(b.inner).(tensor.MemoryReclaimer); ok {
